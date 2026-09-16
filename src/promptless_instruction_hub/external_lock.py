@@ -1,4 +1,9 @@
-"""Convert catalog requests to immutable sources without network access."""
+"""Resolve external plugin declarations to exact Git commits using local data.
+
+Use explicit commit SHAs directly. For ``source.ref: latest``, use the commit SHA
+saved in ``hub.external-plugins.lock.json`` rather than contacting the upstream
+repository. Missing or mismatched lock entries require running ``pig resolve-external``.
+"""
 
 from __future__ import annotations
 
