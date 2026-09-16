@@ -17,9 +17,7 @@ RELEASE_MANIFEST_PATH = Path("hub.release.json")
 STABLE_CHANNEL_PATH = Path("hub.stable.json")
 REPO_CONTEXT_PATH = Path("hub.repo-context.json")
 MANAGED_RUNTIME_MANIFEST_PATH = Path("hub.managed-runtimes.json")
-MIGRATION_GUIDE_URL = (
-    "https://github.com/Promptless/instruction-hub-toolchain/blob/main/README.md#migrating-existing-hubs"
-)
+MIGRATION_GUIDE_URL = "https://github.com/Promptless/pig-toolchain/blob/main/README.md#migrating-existing-hubs"
 
 
 def load_hub_config(hub_root: Path) -> HubConfig:

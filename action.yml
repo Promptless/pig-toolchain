@@ -1,4 +1,4 @@
-name: Promptless Instruction Hub Toolchain
+name: Promptless PIG Toolchain
 description: Build, validate, and publish Promptless Instruction Hub artifacts.
 
 inputs:

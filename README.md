@@ -11,7 +11,7 @@
 pig.
 ```
 
-# Promptless Instruction Hub Toolchain
+# Promptless PIG Toolchain
 
 This repository is the canonical public toolchain for Promptless Instruction
 Hub repositories. It bundles the Python compiler and exposes reusable GitHub
@@ -44,7 +44,7 @@ permissions:
 
 jobs:
   instruction-hub:
-    uses: Promptless/instruction-hub-toolchain/.github/workflows/pr-check.yml@main
+    uses: Promptless/pig-toolchain/.github/workflows/pr-check.yml@main
 ```
 
 `.github/workflows/instruction-hub-publish.yml`:
@@ -67,7 +67,7 @@ concurrency:
 jobs:
   instruction-hub:
     if: github.ref == 'refs/heads/main'
-    uses: Promptless/instruction-hub-toolchain/.github/workflows/publish.yml@main
+    uses: Promptless/pig-toolchain/.github/workflows/publish.yml@main
     with:
       source-branch: main
 ```
@@ -106,7 +106,7 @@ For a hub at the repository root, add this to `.gitlab-ci.yml`:
 
 ```yaml
 include:
-  - remote: https://raw.githubusercontent.com/Promptless/instruction-hub-toolchain/main/templates/gitlab/instruction-hub.yml
+  - remote: https://raw.githubusercontent.com/Promptless/pig-toolchain/main/templates/gitlab/instruction-hub.yml
 ```
 
 The [template](templates/gitlab/instruction-hub.yml) validates and builds hub
@@ -137,7 +137,7 @@ For a pipeline with custom stages, use `include:inputs`:
 ```yaml
 stages: [verify, publish]
 include:
-  - remote: https://raw.githubusercontent.com/Promptless/instruction-hub-toolchain/main/templates/gitlab/instruction-hub.yml
+  - remote: https://raw.githubusercontent.com/Promptless/pig-toolchain/main/templates/gitlab/instruction-hub.yml
     inputs:
       check-stage: verify
       publish-stage: publish
@@ -167,7 +167,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: Promptless/instruction-hub-toolchain@main
+      - uses: Promptless/pig-toolchain@main
         with:
           mode: publish
           source-branch: main

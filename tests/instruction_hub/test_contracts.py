@@ -24,15 +24,13 @@ from .helpers import (
 def test_reusable_workflows_run_caller_pinned_toolchain_ref(workflow_name: str) -> None:
     workflow_text = (WORKFLOWS / workflow_name).read_text()
 
-    assert "Promptless/instruction-hub-toolchain@v0" not in workflow_text
-    assert (
-        f"EXPECTED_WORKFLOW_PREFIX: Promptless/instruction-hub-toolchain/.github/workflows/{workflow_name}@"
-    ) in workflow_text
+    assert "Promptless/pig-toolchain@v0" not in workflow_text
+    assert (f"EXPECTED_WORKFLOW_PREFIX: Promptless/pig-toolchain/.github/workflows/{workflow_name}@") in workflow_text
     assert "JOB_WORKFLOW_REF: ${{ job.workflow_ref }}" in workflow_text
-    assert "repository: Promptless/instruction-hub-toolchain" in workflow_text
+    assert "repository: Promptless/pig-toolchain" in workflow_text
     assert "ref: ${{ steps.toolchain-ref.outputs.ref }}" in workflow_text
-    assert "path: .promptless-instruction-hub-toolchain" in workflow_text
-    assert "uses: ./.promptless-instruction-hub-toolchain" in workflow_text
+    assert "path: .promptless-pig-toolchain" in workflow_text
+    assert "uses: ./.promptless-pig-toolchain" in workflow_text
 
 
 def test_cli_init_scan_verify_build_validate_and_status(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
