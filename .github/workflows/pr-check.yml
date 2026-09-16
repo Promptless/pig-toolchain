@@ -58,7 +58,7 @@ jobs:
         id: toolchain-ref
         shell: bash
         env:
-          EXPECTED_WORKFLOW_PREFIX: Promptless/instruction-hub-toolchain/.github/workflows/pr-check.yml@
+          EXPECTED_WORKFLOW_PREFIX: Promptless/pig-toolchain/.github/workflows/pr-check.yml@
           JOB_WORKFLOW_REF: ${{ job.workflow_ref }}
         run: |
           set -euo pipefail
@@ -77,11 +77,11 @@ jobs:
           printf 'ref=%s\n' "$toolchain_ref" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: Promptless/instruction-hub-toolchain
+          repository: Promptless/pig-toolchain
           ref: ${{ steps.toolchain-ref.outputs.ref }}
-          path: .promptless-instruction-hub-toolchain
+          path: .promptless-pig-toolchain
           persist-credentials: false
-      - uses: ./.promptless-instruction-hub-toolchain
+      - uses: ./.promptless-pig-toolchain
         with:
           mode: ${{ inputs.mode }}
           hub-root: ${{ inputs.hub-root }}
