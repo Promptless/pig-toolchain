@@ -907,7 +907,7 @@ def test_build_injects_managed_bootstrap_runtime(tmp_path: Path) -> None:
         assert runtime["id"] == "host-runtime"
         assert runtime["status"] == "included"
         assert runtime["target"] == target
-        assert runtime["version"] == "0.3.0"
+        assert runtime["version"] == "0.4.0"
         assert runtime["channel"] == "stable"
         assert runtime["path"] == f"runtime/{HOST_RUNTIME_BIN}"
         assert runtime["sha256"] == _runtime_bundle_sha256(plugin_root / "runtime")
@@ -1002,7 +1002,7 @@ def test_build_leaves_customer_package_hook_unmanaged(tmp_path: Path) -> None:
                 ]
             }
         },
-        package_id="customer",
+        plugin_id="customer",
     )
 
     build_hub(hub_root)

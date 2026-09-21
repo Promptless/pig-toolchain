@@ -60,7 +60,6 @@ def _load_runtime_metadata(plugin_root: Path | None, host: Host) -> RuntimeMetad
         plugin_id="unknown",
         plugin_name="unknown",
         plugin_version="unknown",
-        package_id="unknown",
         target=host,
     )
     if plugin_root is None:
@@ -88,7 +87,6 @@ def _load_runtime_metadata(plugin_root: Path | None, host: Host) -> RuntimeMetad
             plugin_id=_string_value(runtime.get("plugin_id")) or "unknown",
             plugin_name=_string_value(runtime.get("plugin_name")) or "unknown",
             plugin_version=_string_value(runtime.get("plugin_version")) or "unknown",
-            package_id=_string_value(runtime.get("package_id")) or "unknown",
             target=host,
         )
     return defaults

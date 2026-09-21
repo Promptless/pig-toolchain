@@ -732,13 +732,11 @@ def test_bootstrap_concurrent_pig_versions_enroll_once(tmp_path: Path, older_plu
             hub_root / "dist/claude/pig",
             tmp_path / "pig-older",
             plugin_id=older_plugin_id,
-            package_id="pig",
         )
         newer_plugin = _clone_plugin_with_identity(
             hub_root / "dist/claude/pig",
             tmp_path / "pig-newer",
             plugin_id="pig",
-            package_id="pig",
         )
 
         def claude_plugin_env(plugin_root: Path) -> dict[str, str]:
@@ -900,8 +898,8 @@ def test_bootstrap_configures_codex_and_claude_and_reports_metadata(tmp_path: Pa
         assert server.session_requests[0]["target"] == "codex"
         assert server.session_requests[0]["plugin_id"] == "pig"
         assert server.session_requests[0]["plugin_version"] == "0.1.0"
-        assert server.session_requests[0]["package_id"] == "pig"
-        assert server.session_requests[0]["bootstrap_version"] == "0.3.0"
+        assert "package_id" not in server.session_requests[0]
+        assert server.session_requests[0]["bootstrap_version"] == "0.4.0"
         assert server.session_requests[0]["toolchain_version"] != "unknown"
         assert server.session_requests[0]["pending_callback"] == "1"
         assert server.session_requests[1]["target"] == "claude"
@@ -924,7 +922,7 @@ def test_bootstrap_configures_codex_and_claude_and_reports_metadata(tmp_path: Pa
                 "policy_version",
                 "status",
             }
-            assert check_in["bootstrap_version"] == "0.3.0"
+            assert check_in["bootstrap_version"] == "0.4.0"
             assert check_in["plugin_version"] == "0.1.0"
             assert check_in["status"] == "configured"
             assert check_in["needs_restart"] is False

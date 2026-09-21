@@ -93,7 +93,6 @@ def test_release_manifest_schema_matches_generated_contract() -> None:
         "channel",
         "executable",
         "hook",
-        "package_id",
         "path",
         "plugin_id",
         "plugin_name",

@@ -74,7 +74,7 @@ from .validation import (
     _requires_newer_bootstrap,
     _string_value,
 )
-from .worker import _get_json, _post_json_response, _validate_signed_policy, _worker_url
+from .worker import _get_json, _post_json_response, _validate_policy, _worker_url
 
 
 class _HashState(Protocol):
@@ -115,12 +115,12 @@ def _run_collect(
         f"/v0/host-enrollment/policy?{urlencode({'target': enrollment_target})}",
     )
     try:
-        signed_policy = _get_json(policy_url, credential.value, label="policy response")
+        policy_response = _get_json(policy_url, credential.value, label="policy response")
     except BootstrapAuthError:
         _forget_cached_host_credential(context)
         _emit({"status": "trace_upload_skipped", "reason": "credential_rejected", "host": host}, quiet=quiet)
         return CollectionResult.INCOMPLETE
-    policy = _validate_signed_policy(signed_policy, enrollment_target)
+    policy = _validate_policy(policy_response, enrollment_target)
     if _requires_newer_bootstrap(policy.required_bootstrap_version, RUNTIME_VERSION):
         _emit({"status": "blocked", "reason": "bootstrap_upgrade_required", "host": host}, quiet=quiet)
         return CollectionResult.INCOMPLETE
