@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import io
 import json
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
@@ -11,8 +9,6 @@ from jsonschema import Draft202012Validator
 
 from promptless_instruction_hub.cli import main
 from promptless_instruction_hub.compiler import build_hub, init_hub
-from promptless_instruction_hub.mcp_status import STATUS_TOOL_NAME, run_status_mcp
-from promptless_instruction_hub.scan.hub import scan_hub
 
 from .external_helpers import external_definition, write_external
 from .helpers import (
@@ -61,46 +57,6 @@ def test_empty_hub_fixture_bootstraps(tmp_path: Path) -> None:
 
     assert result.asset_count == 0
     assert (hub_root / "hub.release.json").exists()
-
-
-def test_status_mcp_returns_invalid_request_errors(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(sys, "stdin", io.StringIO("[]\n"))
-
-    run_status_mcp(tmp_path / "missing-release.json")
-
-    response = json.loads(capsys.readouterr().out)
-    assert response["error"]["code"] == -32600
-    assert response["error"]["message"] == "JSON-RPC request must be an object"
-
-
-def test_status_mcp_reports_release_metadata_without_git_commit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    hub_root = tmp_path / "hub"
-    init_hub(hub_root)
-    scan_hub(hub_root, FIXTURES / "dogfood-source")
-    build_hub(hub_root)
-    request = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {"name": STATUS_TOOL_NAME, "arguments": {}},
-    }
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(request) + "\n"))
-
-    run_status_mcp(hub_root / "hub.release.json")
-
-    response = json.loads(capsys.readouterr().out)
-    status = json.loads(response["result"]["content"][0]["text"])
-    assert status["release_hash"]
-    assert status["version"] == "0.1.0"
-    assert "git_commit" not in status
 
 
 def test_release_manifest_schema_matches_generated_contract() -> None:

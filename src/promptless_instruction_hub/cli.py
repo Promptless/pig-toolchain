@@ -12,7 +12,6 @@ from promptless_instruction_hub.config import RELEASE_MANIFEST_PATH, write_hub_v
 from promptless_instruction_hub.compiler import build_hub, init_hub, validate_hub, verify_hub
 from promptless_instruction_hub.errors import InstructionHubError
 from promptless_instruction_hub.external_plugins import resolve_external_plugins, verify_external_plugins
-from promptless_instruction_hub.mcp_status import run_status_mcp
 from promptless_instruction_hub.release.external import write_external_verification
 from promptless_instruction_hub.release.versions import resolve_publish_version
 from promptless_instruction_hub.scan.hub import scan_hub
@@ -85,9 +84,6 @@ def _build_parser() -> argparse.ArgumentParser:
     publish_version_parser.add_argument("--previous-release-root", type=Path)
     publish_version_parser.add_argument("--hub-relative-path", default="")
 
-    mcp_parser = subcommands.add_parser("mcp-status", help=argparse.SUPPRESS)
-    mcp_parser.add_argument("--manifest", type=Path, required=True)
-
     return parser
 
 
@@ -155,9 +151,6 @@ def _dispatch(args: argparse.Namespace) -> int:
         return 0
     if args.command == "status":
         print(json.dumps(summarize_release_manifest(args.manifest), indent=2, sort_keys=True))
-        return 0
-    if args.command == "mcp-status":
-        run_status_mcp(args.manifest)
         return 0
     msg = f"unknown command: {args.command}"
     raise InstructionHubError(msg)
