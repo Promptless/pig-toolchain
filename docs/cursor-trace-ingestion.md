@@ -94,7 +94,7 @@ dogfooding on macOS, Linux, and Windows remains a release requirement.
 
 Run `python3 scripts/benchmark_cursor_hook.py` to measure launcher overhead
 without accessing user traces or a worker. A 100-launch macOS arm64 sample with
-Node 26.5.0 measured p95 34.02 ms and p99 35.79 ms, within the proposed 50/100 ms
+Node 26.5.0 measured p95 45.17 ms and p99 56.83 ms, within the proposed 50/100 ms
 targets. That benchmark excludes Cursor's own hook scheduling. Background work
 is bounded and runs at reduced priority where supported; it still consumes
 some CPU, disk, and network resources.

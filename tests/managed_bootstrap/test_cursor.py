@@ -8,6 +8,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import time
 from pathlib import Path
 from collections.abc import Iterator
@@ -205,6 +206,64 @@ def test_pending_notification_survives_failed_upload(
     assert not list((cursor.spool_root() / "pending").glob("*.json"))
 
 
+def test_busy_collector_preserves_notification_until_next_wakeup(
+    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A competing process queues work without waiting or starting another collector."""
+    from unittest.mock import Mock
+
+    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import (
+        cli,
+        storage,
+        traces,
+    )
+
+    root = cursor.spool_root()
+    root.mkdir()
+    program = (
+        "import json, sys, time\n"
+        "from pathlib import Path\n"
+        "from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime "
+        "import cli, cursor, traces\n"
+        "cursor.spool_root = lambda: Path(sys.argv[1])\n"
+        "def unexpected(*args, **kwargs):\n"
+        "    raise AssertionError('A busy collector must not enroll or collect')\n"
+        "cli._run_ensure = traces._run_collect = unexpected\n"
+        "started = time.monotonic()\n"
+        "result = cursor.notify({'conversation_id': 'session', 'generation_id': 'g'}, 'stop')\n"
+        "print(json.dumps({'result': result, 'elapsed': time.monotonic() - started}))\n"
+    )
+    with (root / "collector.lock").open("a+b") as lock:
+        storage._lock_state_file(lock)
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", program, str(root)],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=3,
+            )
+            report = json.loads(result.stdout)
+            assert report["result"] == 0
+            assert report["elapsed"] < 0.5
+            pending = list((root / "pending").glob("*.json"))
+            assert len(pending) == 1
+            assert json.loads(pending[0].read_text())["conversation_id"] == "session"
+        finally:
+            storage._unlock_state_file(lock)
+
+    ensure = Mock(return_value=0)
+    collect = Mock(return_value=0)
+    monkeypatch.setattr(cli, "_run_ensure", ensure)
+    monkeypatch.setattr(traces, "_run_collect", collect)
+    monkeypatch.setattr(cursor.time, "sleep", lambda _: None)
+    monkeypatch.setattr(cursor.os, "nice", lambda _: None, raising=False)
+    assert cursor.notify({"conversation_id": "next-session"}, "session_start") == 0
+    ensure.assert_called_once()
+    assert {call.kwargs["hook_context"].session_id for call in collect.call_args_list} == {"session", "next-session"}
+    assert not list((root / "pending").glob("*.json"))
+
+
 def test_spool_limit_preserves_existing_journal(database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
     first = {"event_id": "a", "event": {"kind": "user_message", "text": "saved"}}
     path = cursor.append_observations("session", [first])
@@ -400,3 +459,65 @@ def test_cursor_collect_uploads_only_acknowledged_journal_ranges(tmp_path: Path)
     finally:
         server.stop()
         connection.close()
+
+
+def test_journal_retains_complete_result_after_pruned_ui_fallback(database: sqlite3.Connection) -> None:
+    """A pruned database snapshot cannot supersede an already retained result."""
+    put(database, "composerData:session", {"fullConversationHeadersOnly": [{"bubbleId": "tool"}]})
+    tool = {"name": "run_terminal_cmd", "toolCallId": "call-1", "status": "completed"}
+    put(
+        database,
+        "bubbleId:session:tool",
+        {
+            "toolFormerData": {
+                **tool,
+                "toolCallBinary": base64.b64encode(call(1, wire(5, "complete stdout"))).decode(),
+            }
+        },
+    )
+    page = cursor_db.read_session("session", deadline=time.monotonic() + 1)
+    path = cursor.append_observations("session", page.records)
+    before = path.read_bytes()
+    put(database, "bubbleId:session:tool", {"toolFormerData": {**tool, "result": "truncated UI result"}})
+    page = cursor_db.read_session("session", deadline=time.monotonic() + 1)
+    assert page.records[-1]["capture"]["completeness"] == "partial"
+    cursor.append_observations("session", page.records)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("program", "status"),
+    [
+        ("import sys; sys.stdin.read()", "completed"),
+        ("raise RuntimeError('SECRET')", "collector_failed"),
+        ("import time; time.sleep(30)", "collector_timeout"),
+    ],
+)
+def test_detached_launcher_records_collector_outcome(tmp_path: Path, program: str, status: str) -> None:
+    """Crashes and watchdog kills produce only bounded metadata after detachment."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is required for Cursor hooks")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    source = Path(cursor.__file__).parents[1] / "cursor-hook.cjs"
+    hook = runtime / source.name
+    shutil.copyfile(source, hook)
+    (runtime / "promptless-host-runtime").write_text(program)
+    # Exercise the actual watchdog without waiting two minutes in the test.
+    preload = tmp_path / "timers.cjs"
+    preload.write_text(
+        "const original = global.setTimeout;\n"
+        "global.setTimeout = (fn, ms, ...args) => original(fn, ms === 120000 ? 200 : ms, ...args);\n"
+    )
+    result = subprocess.run(
+        [node, "--require", str(preload), str(hook), "stop", "--background", "e30="],
+        env={**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)},
+        capture_output=True,
+        timeout=10,
+        check=True,
+    )
+    assert not result.stdout and not result.stderr
+    diagnostic = json.loads((tmp_path / ".promptless/instruction-hub/cursor-launcher-status.json").read_text())
+    assert diagnostic["status"] == status
+    assert set(diagnostic) == {"status", "observed_at"}

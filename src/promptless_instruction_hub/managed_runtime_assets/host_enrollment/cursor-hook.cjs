@@ -40,17 +40,17 @@ if (process.argv[3] !== '--background') {
   const candidates = process.platform === 'win32' ? [['py', '-3'], ['python'], ['python3']] : [['python3'], ['python']];
   const body = Buffer.from(process.argv[4] || '', 'base64');
   const root = path.dirname(__dirname);
+  function recordStatus(status) {
+    const directory = path.join(os.homedir(), '.promptless', 'instruction-hub');
+    try {
+      fs.mkdirSync(directory, {recursive: true, mode: 0o700});
+      fs.writeFileSync(path.join(directory, 'cursor-launcher-status.json'),
+        JSON.stringify({status, observed_at: new Date().toISOString()}), {mode: 0o600});
+    } catch { /* Never affect the editor when local diagnostics cannot be saved. */ }
+  }
   function runNext() {
     const command = candidates.shift();
-    if (!command) {
-      const directory = path.join(os.homedir(), '.promptless', 'instruction-hub');
-      try {
-        fs.mkdirSync(directory, {recursive: true, mode: 0o700});
-        fs.writeFileSync(path.join(directory, 'cursor-launcher-status.json'),
-          JSON.stringify({status: 'python_unavailable', observed_at: new Date().toISOString()}), {mode: 0o600});
-      } catch { /* Never affect the editor when local diagnostics cannot be saved. */ }
-      return;
-    }
+    if (!command) return recordStatus('python_unavailable');
     const probe = spawn(command[0], [...command.slice(1), '-c',
       'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'], {stdio: 'ignore', windowsHide: true});
     const timer = setTimeout(() => probe.kill(), 2000);
@@ -71,8 +71,16 @@ if (process.argv[3] !== '--background') {
       stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true,
       env: {...process.env, CURSOR_PLUGIN_ROOT: root}
     });
-    const watchdog = setTimeout(() => child.kill(), 120000);
-    child.on('exit', () => clearTimeout(watchdog));
+    let timedOut = false;
+    const watchdog = setTimeout(() => {
+      timedOut = true;
+      recordStatus('collector_timeout');
+      child.kill('SIGKILL');
+    }, 120000);
+    child.on('exit', code => {
+      clearTimeout(watchdog);
+      if (!timedOut) recordStatus(code === 0 ? 'completed' : 'collector_failed');
+    });
     child.on('error', () => { clearTimeout(watchdog); runNext(); });
     child.stdin.on('error', () => {});
     child.stdin.end(body);

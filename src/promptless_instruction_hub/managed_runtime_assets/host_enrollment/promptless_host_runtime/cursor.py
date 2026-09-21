@@ -151,7 +151,7 @@ def append_observations(session_id: str, observations: list[dict[str, JsonValue]
             previous = latest.get(identity, {})
             if mapping(previous.get("capture")).get("completeness") == "available" and mapping(
                 observation.get("capture")
-            ).get("completeness") in ("missing", "pruned", "unsupported", "size_limit"):
+            ).get("completeness") in ("missing", "pruned", "partial", "unsupported", "size_limit"):
                 # Cursor pruning must not replace a result we already retained.
                 continue
             content = {**observation, "event_id": identity, "native_event_id": native_id}
