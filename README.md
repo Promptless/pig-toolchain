@@ -327,7 +327,7 @@ legacy fields and the old `packages/` directory with migration guidance.
    `includes`. Update custom CI path filters and scripts that reference the old
    directory or `pig init --plugin-id` / `--plugin-name` flags.
 3. Rename `plugin_version` to `version` in `hub.yaml` and use `--version`
-   instead of `--plugin-version` in scripts. Version 2 release manifests use
+   instead of `--plugin-version` in scripts. Release manifests use
    top-level `version`, `marketplace`, `stable_plugins`, and `version_basis.plugins`.
    Version 1 manifests are rejected. Coordinate a one-time rebuild of existing
    release artifacts with the source migration before resuming publication.
@@ -547,10 +547,7 @@ Hubs follow the latest merged toolchain on `main`. GitHub callers use `@main`;
 GitLab callers use the `/main/` template URL and the default `toolchain-ref: main`.
 Resolved commit hashes in CI logs identify the compiler used for a build.
 
-Releases containing external plugins use manifest schema 3 and record their
-provenance in `version_basis.plugins`; authored-only releases use schema 2.
-The publisher accepts both. Upgrade older toolchains before consuming schema 3
-releases.
+Release manifests record external-plugin provenance in `version_basis.plugins`.
 
 The publisher stores verified upstream versions in release-side
 `hub.external.json`, bound to the release hash and exact source declarations.
