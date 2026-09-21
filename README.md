@@ -684,8 +684,10 @@ Verification and publishing do not require worker credentials or worker access.
 
 Omitting `trace_ingestion` or `enabled` also disables ingestion. Existing hubs
 that use ingestion must explicitly set `enabled: true`. Enabling ingestion
-bundles the existing Claude/Codex host runtime; it does not
-provision a worker. Cursor and Gemini do not receive that managed runtime.
+bundles the Claude, Codex, and Cursor host runtime; it does not provision a
+worker. Gemini does not receive that managed runtime. See the
+[Cursor collection guide](docs/cursor-trace-ingestion.md) for prerequisites,
+capture limits, and desktop qualification.
 
 After changing this setting, publish the hub and refresh its installed plugins.
 Disabling it removes managed hooks from the new release; an older installed
@@ -695,25 +697,30 @@ data or change a worker deployment.
 ### Managed Host Runtime
 
 When `trace_ingestion.enabled` is true, the toolchain owns Promptless-managed runtime artifacts that are injected into
-the canonical `pig` plugin, including the host runtime used by Codex and
-Claude lifecycle hooks. Other generated plugins receive no toolchain-managed
+the canonical `pig` plugin, including the host runtime used by Codex, Claude,
+and Cursor lifecycle hooks. Other generated plugins receive no toolchain-managed
 runtime or lifecycle hooks. During dogfood, generated Codex hooks wrap the bundled
 stdlib-only Python runtime with POSIX shell checks. The stable executable in
 `runtime/` delegates to private sibling modules that separate CLI dispatch,
 enrollment, trace collection, host configuration, persistence, and output.
 Generated Claude hooks use Claude Code's exec-form hook so Windows installs do
 not need a POSIX shell; Node must be available to start the inline launcher.
-Every SessionStart launcher starts one detached supervisor that inherits the
+Claude and Codex SessionStart launchers start a detached supervisor that inherits the
 hook input and redirects background output away from the agent transcript. The
 Claude supervisor collects both Claude Code and any detected Claude Desktop
 sources.
-Startup launchers emit schema-safe diagnostics when the host cannot resolve the
+Claude and Codex startup launchers emit schema-safe diagnostics when the host cannot resolve the
 plugin root, a readable managed runtime bundle (the launcher plus its sibling
 package and CLI entry module), or Python 3.9+. Terminal lifecycle launchers stay
 quiet: they resolve a complete runtime bundle under the plugin root, fall back
 to a complete sibling installed version with the same runtime-bundle layout for
 the same plugin id when the recorded root is stale or incomplete, and exit 0
 with no output when no usable bundle exists.
+
+Cursor hooks use a bundled Node launcher with a 250 ms timeout. The foreground
+only accepts bounded identity/path metadata and launches a detached process.
+Interpreter discovery, enrollment, SQLite reads, journaling, and uploads happen
+in the background. Cursor receives no collector output.
 
 ```sh
 sh -c 'root=${PLUGIN_ROOT:-}; ...; find python3/python/py; run promptless-host-runtime session-start --host codex --detach'
@@ -758,8 +765,9 @@ the worker commits one chunk per transaction; this keeps the request-level
 acknowledgement at the same atomic boundary.
 
 The runtime uploads native host transcript JSONL ranges to
-`/v0/traces/batches?target=...`. Claude Code, Codex, and Claude Desktop share one
-uploader and forward-only ledger. The ledger lives at
+`/v0/traces/batches?target=...`. Claude Code, Codex, Claude Desktop, and Cursor
+share one uploader and forward-only ledger. Cursor exports saved database
+observations to append-only JSONL journals before uploading. The ledger lives at
 `~/.promptless/instruction-hub/host-runtime-ledger.json` or
 `PROMPTLESS_HOST_RUNTIME_LEDGER` when set. Uploads use the host credential and
 are gated by the `enabled_hosts` policy. Codex idle discovery scans only
@@ -767,7 +775,7 @@ are gated by the `enabled_hosts` policy. Codex idle discovery scans only
 `CODEX_HOME/archived_sessions/**/*.jsonl`. Hook-provided current transcript
 paths remain eligible outside those roots.
 
-SessionStart hooks launch one quiet `ensure`-then-collection supervisor. They
+Claude and Codex SessionStart hooks launch one quiet `ensure`-then-collection supervisor. They
 include active files so pre-existing history is uploaded from byte zero when a
 source has no acknowledged offset. Terminal lifecycle hooks (`Stop`,
 `SessionEnd`, and `SubagentStop`) run collection only. Hook input accepts
@@ -777,8 +785,9 @@ Claude-style hooks. Claude Desktop has no hook-provided current transcript and
 starts with idle catch-up.
 
 Hook timeouts cover the launcher, while collection runs in a detached process.
-Terminal hooks use a shared 3-second launcher budget on every host, which also
-fits Codex's `SessionEnd` maximum. Startup hooks use 30 seconds.
+Claude and Codex terminal hooks use a 3-second launcher budget, which also fits
+Codex's `SessionEnd` maximum. Their startup hooks use 30 seconds. All four
+Cursor lifecycle hooks use 250 ms.
 
 A collection follows this order:
 

@@ -785,7 +785,7 @@ def test_bootstrap_blocks_when_worker_requires_different_runtime_version(tmp_pat
     init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
-    server = _FakeWorkerServer(policy=_policy_with(required_bootstrap_version="0.3.0"))
+    server = _FakeWorkerServer(policy=_policy_with(required_bootstrap_version="99.0.0"))
     server.start()
     try:
         home = tmp_path / "home"

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Literal, Union
 
-RUNTIME_VERSION = "0.2.9"
+RUNTIME_VERSION = "0.3.0"
 
 
 RUNTIME_CHANNEL = "stable"
@@ -164,8 +164,8 @@ PENDING_FIRST_ENROLLMENT_SUCCESS_KEY = "pending_first_enrollment_success_by_targ
 FIRST_ENROLLMENT_SUCCESS_SHOWN_KEY = "first_enrollment_success_shown_at_by_target"
 
 
-Host = Literal["codex", "claude", "claude-desktop"]
-HOST_VALUES = ("codex", "claude", "claude-desktop")
+Host = Literal["codex", "claude", "claude-desktop", "cursor"]
+HOST_VALUES = ("codex", "claude", "claude-desktop", "cursor")
 
 
 def _enrollment_host(host: Host) -> Host:
@@ -367,6 +367,7 @@ class HookTraceContext:
     parent_session_id: str | None
     agent_id: str | None
     agent_type: str | None
+    generation_id: str | None = None
 
 
 @dataclass(frozen=True)

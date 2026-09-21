@@ -57,7 +57,9 @@ def test_native_bundles_select_merge_and_preserve_managed_hooks(tmp_path: Path) 
         assert (root / "hooks/a/run.py").read_text() == "print('hook')\n"
         assert not (root / "hooks/a/asset.yaml").exists()
     cursor = json.loads((tmp_path / "dist/cursor/pig/hooks/hooks.json").read_text())
-    assert cursor == {"version": 1, "hooks": {"sessionStart": [{"command": "cursor-a"}, {"command": "cursor-b"}]}}
+    assert cursor["version"] == 1
+    assert cursor["hooks"]["sessionStart"][:2] == [{"command": "cursor-a"}, {"command": "cursor-b"}]
+    assert "cursor-hook.cjs" in cursor["hooks"]["sessionStart"][2]["command"]
     assert not (tmp_path / "dist/gemini/pig/hooks").exists()
 
 

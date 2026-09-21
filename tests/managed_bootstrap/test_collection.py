@@ -113,7 +113,7 @@ def test_collect_uploads_full_transcript_then_only_new_ranges(tmp_path: Path) ->
         assert batch["host"] == "codex"
         assert batch["session_id"] == "codex_session_1"
         assert batch["policy_version"] == 1
-        assert batch["collector_version"] == "0.2.9"
+        assert batch["collector_version"] == "0.3.0"
         chunks = _json_list(batch["chunks"], "batch.chunks")
         # contiguous complete lines coalesce into one contract-shaped range chunk
         assert len(chunks) == 1

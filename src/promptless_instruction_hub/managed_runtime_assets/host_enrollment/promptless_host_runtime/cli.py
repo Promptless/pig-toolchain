@@ -78,6 +78,14 @@ def main(argv: list[str] | None = None) -> int:
     """Run the requested host-runtime command."""
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
+    if args.command == "cursor-notify":
+        from .cursor import notify
+
+        try:
+            return notify(_read_hook_context(), _lifecycle_event(args.lifecycle))
+        except (BootstrapError, OSError, ValueError, urllib.error.URLError) as exc:
+            _record_collector_failure("cursor", exit_code=None, error_code=_exception_error_code(exc))
+            return 1
     if args.command == "version":
         return _run_version_command(json_output=args.json)
     host = _resolve_host(args.host)
@@ -131,6 +139,10 @@ def main(argv: list[str] | None = None) -> int:
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=RUNTIME_EXECUTABLE, description="Promptless host runtime")
     subcommands = parser.add_subparsers(dest="command", required=True)
+    cursor_parser = subcommands.add_parser("cursor-notify", help=argparse.SUPPRESS)
+    cursor_parser.add_argument(
+        "--lifecycle", required=True, choices=("session_start", "stop", "session_end", "subagent_stop")
+    )
 
     ensure_parser = subcommands.add_parser("ensure", help="Enroll if needed and ensure host telemetry config")
     _add_host_argument(ensure_parser)
@@ -197,7 +209,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _add_host_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--host", choices=("auto", "codex", "claude", "claude-desktop"), default="auto")
+    parser.add_argument("--host", choices=("auto", "codex", "claude", "claude-desktop", "cursor"), default="auto")
 
 
 def _run_session_start_command(host: Host, *, if_sources: bool, detach: bool, supervised: bool) -> int:

@@ -106,7 +106,7 @@ def _run_collect(
     credential = _cached_host_credential(context)
     if credential is None:
         _emit({"status": "trace_upload_skipped", "reason": "not_enrolled", "host": host}, quiet=quiet)
-        return 0
+        return 1 if host == "cursor" else 0
 
     policy_url = _worker_url(
         worker_base_url,
@@ -117,12 +117,23 @@ def _run_collect(
     except BootstrapAuthError:
         _forget_cached_host_credential(context)
         _emit({"status": "trace_upload_skipped", "reason": "credential_rejected", "host": host}, quiet=quiet)
-        return 0
+        return 1 if host == "cursor" else 0
     policy = _validate_signed_policy(signed_policy, enrollment_target)
     if _requires_newer_bootstrap(policy.required_bootstrap_version, RUNTIME_VERSION):
         _emit({"status": "blocked", "reason": "bootstrap_upgrade_required", "host": host}, quiet=quiet)
-        return 0
+        return 1 if host == "cursor" else 0
 
+    export_complete = True
+    if host == "cursor":
+        from .cursor import prepare_journals
+
+        exported = prepare_journals(hook_context, lifecycle_event)
+        hook_context = exported.context
+        export_complete = exported.complete
+        # Each journal record owns lifecycle and session identity. A hook never
+        # finalizes other sessions discovered during this collection pass.
+        lifecycle_event = None
+        include_active = True
     current_transcript_paths = _current_transcript_paths(hook_context, lifecycle_event)
     upload_url = _worker_url(worker_base_url, f"/v0/traces/batches?{urlencode({'target': host})}")
     uploaded_batch_count = 0
@@ -152,7 +163,7 @@ def _run_collect(
             {"status": "trace_upload_partial", "reason": "collection_deadline_exceeded", "host": host},
             quiet=quiet,
         )
-        return 0
+        return 1 if host == "cursor" else 0
     uploaded_batch_count += first_current_counts[0]
     uploaded_chunk_count += first_current_counts[1]
     unparsed_record_count += first_current_counts[2]
@@ -193,7 +204,7 @@ def _run_collect(
         deadline_exceeded = not idle_scan_complete
     if not current_transcript_paths and not idle_source_paths and idle_scan_complete:
         _emit({"status": "trace_upload_skipped", "reason": "no_sources", "host": host}, quiet=quiet)
-        return 0
+        return 1 if host == "cursor" else 0
 
     if not deadline_exceeded:
         try:
@@ -217,7 +228,9 @@ def _run_collect(
             deadline_exceeded = True
 
     payload: dict[str, JsonValue] = {
-        "status": "trace_upload_partial" if deadline_exceeded else "trace_upload_complete",
+        "status": "trace_upload_partial"
+        if deadline_exceeded or not export_complete or (host == "cursor" and unreadable_source_hashes)
+        else "trace_upload_complete",
         "host": host,
         "batch_count": uploaded_batch_count,
         "chunk_count": uploaded_chunk_count,
@@ -228,7 +241,7 @@ def _run_collect(
     if deadline_exceeded:
         payload["reason"] = "collection_deadline_exceeded"
     _emit(payload, quiet=quiet)
-    return 0
+    return int(host == "cursor" and (deadline_exceeded or bool(unreadable_source_hashes) or not export_complete))
 
 
 def _lifecycle_event(value: str | None) -> LifecycleEvent:
@@ -270,6 +283,7 @@ def _hook_trace_context(context: dict[str, JsonValue]) -> HookTraceContext:
         )
     )
     return HookTraceContext(
+        generation_id=_non_empty(_first_string(context, ("generation_id",))),
         transcript_path=transcript_path,
         agent_transcript_path=agent_transcript_path,
         session_id=_non_empty(

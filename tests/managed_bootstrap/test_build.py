@@ -342,6 +342,7 @@ def test_build_injects_managed_bootstrap_runtime(tmp_path: Path) -> None:
             stale_runtime.write_text("raise SystemExit(97)\n")
             sibling_runtime.parent.mkdir(parents=True)
             shutil.copy2(stub_runtime, sibling_runtime)
+            shutil.copy2(stub_runtime.parent / "cursor-hook.cjs", sibling_bin / "cursor-hook.cjs")
             shutil.copytree(stub_runtime_package, sibling_bin / HOST_RUNTIME_PACKAGE)
             sibling_runtime.chmod(0o644)
             return stale_root
@@ -906,7 +907,7 @@ def test_build_injects_managed_bootstrap_runtime(tmp_path: Path) -> None:
         assert runtime["id"] == "host-runtime"
         assert runtime["status"] == "included"
         assert runtime["target"] == target
-        assert runtime["version"] == "0.2.9"
+        assert runtime["version"] == "0.3.0"
         assert runtime["channel"] == "stable"
         assert runtime["path"] == f"runtime/{HOST_RUNTIME_BIN}"
         assert runtime["sha256"] == _runtime_bundle_sha256(plugin_root / "runtime")
@@ -916,14 +917,14 @@ def test_build_injects_managed_bootstrap_runtime(tmp_path: Path) -> None:
     codex_manifest = json.loads((hub_root / "dist/codex/pig/.codex-plugin/plugin.json").read_text())
     assert codex_manifest["hooks"] == "./hooks/hooks.json"
 
-    for target in ("cursor", "gemini"):
+    for target in ("gemini",):
         plugin_root = hub_root / "dist" / target / "pig"
         assert not (plugin_root / "runtime" / HOST_RUNTIME_BIN).exists()
         assert not (plugin_root / "runtime" / HOST_RUNTIME_PACKAGE).exists()
         assert not (plugin_root / "hub.managed-runtimes.json").exists()
 
     release_manifest = json.loads((hub_root / "hub.release.json").read_text())
-    assert {runtime["target"] for runtime in release_manifest["managed_runtimes"]} == {"codex", "claude"}
+    assert {runtime["target"] for runtime in release_manifest["managed_runtimes"]} == {"codex", "claude", "cursor"}
     _assert_no_promptless_directory(hub_root)
 
 
