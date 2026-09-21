@@ -22,7 +22,8 @@
     "schema_version": {
       "enum": [
         2,
-        3
+        3,
+        4
       ]
     },
     "org": {
@@ -71,7 +72,6 @@
           "channel",
           "executable",
           "hook",
-          "package_id",
           "path",
           "plugin_id",
           "plugin_name",
@@ -515,6 +515,66 @@
               "plugins": {
                 "items": {
                   "$ref": "#/$defs/authored_plugin"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "enum": [
+              2,
+              3
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "managed_runtimes": {
+            "items": {
+              "required": [
+                "package_id"
+              ]
+            }
+          },
+          "version_basis": {
+            "properties": {
+              "managed_runtimes": {
+                "items": {
+                  "required": [
+                    "package_id"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "managed_runtimes": {
+            "items": {
+              "not": {
+                "required": [
+                  "package_id"
+                ]
+              }
+            }
+          },
+          "version_basis": {
+            "properties": {
+              "managed_runtimes": {
+                "items": {
+                  "not": {
+                    "required": [
+                      "package_id"
+                    ]
+                  }
                 }
               }
             }

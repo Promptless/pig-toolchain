@@ -34,7 +34,7 @@ HOST_RUNTIME_SESSION_START_HOOK_TIMEOUT_SECONDS = 30
 # https://learn.chatgpt.com/docs/hooks#config-shape
 HOST_RUNTIME_TERMINAL_HOOK_TIMEOUT_SECONDS = 3
 HOST_RUNTIME_CHANNEL = "stable"
-HOST_RUNTIME_VERSION = "0.3.0"
+HOST_RUNTIME_VERSION = "0.4.0"
 MANAGED_RUNTIME_MANIFEST = MANAGED_RUNTIME_MANIFEST_PATH
 SUPPORTED_HOST_RUNTIME_TARGETS: tuple[Harness, ...] = ("claude", "codex", "cursor")
 MISSING_RUNTIME_ROOT_MESSAGE = (
@@ -75,7 +75,6 @@ class ManagedRuntimeRecord:
     id: str
     status: RuntimeStatus
     target: Harness
-    package_id: str
     plugin_id: str
     plugin_name: str
     plugin_version: str
@@ -92,8 +91,6 @@ class ManagedRuntimeRecord:
 
         data: dict[str, JsonValue] = {
             "id": self.id,
-            # Enrollment still requires the v1 source-identity field.
-            "package_id": self.package_id,
             "plugin_id": self.plugin_id,
             "plugin_name": self.plugin_name,
             "plugin_version": self.plugin_version,
@@ -132,7 +129,6 @@ def render_managed_runtimes(
         id=HOST_RUNTIME_ID,
         status="included",
         target=target,
-        package_id=plugin.id,
         plugin_id=plugin.id,
         plugin_name=plugin.name,
         plugin_version=config.version,
@@ -594,7 +590,7 @@ def _write_plugin_manifest(target_root: Path, records: tuple[ManagedRuntimeRecor
     write_json(
         target_root / MANAGED_RUNTIME_MANIFEST,
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "managed_runtimes": [record.to_manifest() for record in records],
         },
     )

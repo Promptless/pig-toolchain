@@ -319,7 +319,6 @@ def _hosted_enrollment_start_url(
         "target": context.metadata.target,
         "plugin_id": context.metadata.plugin_id,
         "plugin_version": context.metadata.plugin_version,
-        "package_id": context.metadata.package_id,
         "bootstrap_version": context.metadata.bootstrap_version,
         "toolchain_version": context.metadata.toolchain_version,
         "host_instance_id": context.host_instance_id,

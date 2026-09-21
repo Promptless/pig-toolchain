@@ -33,16 +33,6 @@ def _semver_tuple(value: str) -> tuple[int, int, int] | None:
     return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
 
-def _validate_otlp_http_endpoint(value: JsonValue | None, field_name: str, expected_path: str) -> str:
-    endpoint = _string_value(value)
-    if endpoint is None:
-        raise BootstrapError(f"{field_name} endpoint must be a string")
-    parsed = _validate_http_url(endpoint, field_name)
-    if parsed.path != expected_path:
-        raise BootstrapError(f"{field_name} endpoint must use path {expected_path}")
-    return endpoint
-
-
 def _validate_http_url(value: str, field_name: str) -> SplitResult:
     parsed = urlsplit(value)
     if parsed.scheme not in {"http", "https"} or parsed.netloc == "":

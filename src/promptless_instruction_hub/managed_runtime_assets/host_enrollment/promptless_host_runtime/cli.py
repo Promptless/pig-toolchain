@@ -76,7 +76,7 @@ from .traces import (
     _run_collect,
 )
 from .validation import _json_mapping_or_empty, _requires_newer_bootstrap
-from .worker import _get_json, _post_check_in, _validate_signed_policy, _worker_url
+from .worker import _get_json, _post_check_in, _validate_policy, _worker_url
 
 _MAX_CURSOR_PENDING = 4096
 
@@ -730,7 +730,7 @@ def _run_host_enrollment(
     policy_url = _worker_url(worker_base_url, f"/v0/host-enrollment/policy?{urlencode({'target': host})}")
     check_in_url = _worker_url(worker_base_url, "/v0/host-enrollment/check-ins")
     try:
-        signed_policy = _get_json(policy_url, credential.value, label="policy response")
+        policy_response = _get_json(policy_url, credential.value, label="policy response")
     except BootstrapAuthError:
         _forget_cached_host_credential(context)
         enrollment_attempt = _enroll_host_credential(context, quiet=quiet)
@@ -751,9 +751,9 @@ def _run_host_enrollment(
             )
             return 0
         credential = enrollment_attempt.credential
-        signed_policy = _get_json(policy_url, credential.value, label="policy response")
-    policy = _validate_signed_policy(signed_policy, host)
-    credential = _credential_with_policy_identity(credential, signed_policy)
+        policy_response = _get_json(policy_url, credential.value, label="policy response")
+    policy = _validate_policy(policy_response, host)
+    credential = _credential_with_policy_identity(credential, policy_response)
     _store_internal_promptless_identity(context, credential)
     trace_upload_endpoint = _worker_url(worker_base_url, "/v0/traces/batches")
     if _requires_newer_bootstrap(policy.required_bootstrap_version, RUNTIME_VERSION):

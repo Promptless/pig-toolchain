@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, Literal, Union
 
-RUNTIME_VERSION = "0.3.0"
+RUNTIME_VERSION = "0.4.0"
 
 
 RUNTIME_CHANNEL = "stable"
@@ -279,17 +279,12 @@ class RuntimeMetadata:
     plugin_id: str
     plugin_name: str
     plugin_version: str
-    package_id: str
     target: Host
 
 
 @dataclass(frozen=True)
 class HostPolicy:
-    """Validated worker policy body used by the host runtime.
-
-    The signed policy still carries an OTLP ``collector`` section for older
-    bootstraps; this runtime ignores it entirely.
-    """
+    """Validated worker policy used by the host runtime."""
 
     policy_version: int
     required_bootstrap_version: str | None
