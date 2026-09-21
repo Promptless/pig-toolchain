@@ -31,7 +31,9 @@ def _resolve_host(host_arg: str) -> Host:
 
 
 def _plugin_root() -> Path | None:
-    raw_root = os.environ.get("CURSOR_PLUGIN_ROOT") or os.environ.get("PLUGIN_ROOT") or os.environ.get("CLAUDE_PLUGIN_ROOT")
+    raw_root = (
+        os.environ.get("CURSOR_PLUGIN_ROOT") or os.environ.get("PLUGIN_ROOT") or os.environ.get("CLAUDE_PLUGIN_ROOT")
+    )
     if raw_root is None or raw_root.strip() == "":
         return None
     return Path(raw_root).expanduser()
