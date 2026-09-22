@@ -14,6 +14,7 @@ from promptless_instruction_hub.compiler import build_hub, init_hub
 from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
     CHUNK_TARGET_BYTES,
     CollectDeadlineExceeded,
+    CollectionResult,
     HookTraceContext,
     Host,
     HostPolicy,
@@ -160,7 +161,7 @@ def test_current_transcript_ack_is_persisted_before_idle_discovery(
                 include_active=False,
                 quiet=True,
             )
-            == 0
+            is CollectionResult.COMPLETE
         )
         assert idle_discovery_observed
     finally:
@@ -209,7 +210,7 @@ def test_first_current_transcript_lock_timeout_reports_partial(tmp_path: Path, m
                 include_active=False,
                 quiet=True,
             )
-            == 0
+            is CollectionResult.INCOMPLETE
         )
         assert server.trace_batches == []
         assert lock_call_count == 1

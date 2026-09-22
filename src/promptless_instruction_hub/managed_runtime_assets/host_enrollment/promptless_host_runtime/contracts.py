@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Literal, Union
 
@@ -251,6 +252,13 @@ class TraceSourceSequenceConflict(BootstrapError):
             f"trace source {source_path_hash} range {requested_start_offset}-{requested_end_offset} "
             f"conflicts with worker watermark {acknowledged_offset}"
         )
+
+
+class CollectionResult(Enum):
+    """Whether a collection pass completed capture and upload of available sources."""
+
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
 
 
 class CollectDeadlineExceeded(BootstrapError):

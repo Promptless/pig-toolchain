@@ -878,7 +878,7 @@ def test_collect_skips_unreadable_idle_source_and_uploads_the_rest(tmp_path: Pat
         }
         assert uploaded_contents == {second_record, readable_record}
         diagnostics = _diagnostic_log_entries(home)
-        assert diagnostics[-1]["status"] == "trace_upload_complete"
+        assert diagnostics[-1]["status"] == "trace_upload_partial"
         assert diagnostics[-1]["unreadable_source_count"] == 1
         assert diagnostics[-1]["batch_count"] == 2
 

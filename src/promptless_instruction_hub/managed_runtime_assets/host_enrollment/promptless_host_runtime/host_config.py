@@ -12,6 +12,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from . import cursor, cursor_db
 from .contracts import (
     BootstrapError,
     CLAUDE_DESKTOP_TRACE_DIR_NAMES,
@@ -30,9 +31,7 @@ from .validation import _non_empty, _string_value
 
 def _native_trace_globs(host: Host) -> tuple[str, ...]:
     if host == "cursor":
-        from .cursor import spool_root
-
-        return (str(spool_root() / "journals/*.jsonl"),)
+        return (str(cursor.spool_root() / "journals/*.jsonl"),)
     if host == "claude":
         return (str(Path.home() / ".claude/projects/**/*.jsonl"),)
     if host == "claude-desktop":
@@ -69,9 +68,7 @@ def _claude_desktop_trace_roots() -> tuple[Path, ...]:
 
 def _has_native_trace_sources(host: Host) -> bool:
     if host == "cursor":
-        from .cursor_db import database_path
-
-        return database_path().is_file()
+        return cursor_db.database_path().is_file()
     for pattern in _native_trace_globs(host):
         for raw_path in glob.iglob(pattern, recursive=True):
             if Path(raw_path).is_file():
@@ -81,9 +78,7 @@ def _has_native_trace_sources(host: Host) -> bool:
 
 def _host_config_status(host: Host) -> dict[str, JsonValue]:
     if host == "cursor":
-        from .cursor_db import database_path
-
-        path = database_path()
+        path = cursor_db.database_path()
         return {"path": str(path), "exists": path.is_file(), "managed_config_detected": False}
     if host == "codex":
         return _codex_config_status()

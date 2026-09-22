@@ -1,4 +1,4 @@
-"""Durable Cursor observations, append-only journals, and detached coordination."""
+"""Capture Cursor observations into durable, append-only upload journals."""
 
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ MAX_RECORD = 2 * 1024 * 1024
 MAX_JOURNAL = 128 * 1024 * 1024
 MAX_SPOOL = 1024 * 1024 * 1024
 MAX_JOURNALS = 4096
-MAX_PENDING = 4096
 SESSION_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,200}$")
 
 
@@ -306,58 +305,3 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
         replace(context, transcript_path=current, agent_transcript_path=None, session_id=subject),
         complete and not pending,
     )
-
-
-def notify(context: dict[str, JsonValue], lifecycle: LifecycleEvent) -> int:
-    """Persist a notification and coalesce detached collectors with a nonblocking lock."""
-    from .cli import _run_ensure
-    from .traces import _hook_trace_context, _run_collect
-
-    root = spool_root()
-    queue = root / "pending"
-    queue.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if os.name != "nt":
-        os.nice(10)
-    # Hook payloads contain metadata only. Persist only fields consumed by our adapter.
-    allowed = (
-        "conversation_id",
-        "generation_id",
-        "transcript_path",
-        "agent_transcript_path",
-        "parent_conversation_id",
-        "agent_id",
-    )
-    payload = {key: value for key in allowed if isinstance(value := context.get(key), str) and len(value) <= 4096}
-    payload["lifecycle"] = lifecycle
-    queued_path = queue / (_digest(payload) + ".json")
-    if not queued_path.exists() and sum(1 for _ in queue.glob("*.json")) >= MAX_PENDING:
-        raise ValueError("cursor_pending_limit")
-    _atomic_write_text(queued_path, json.dumps(payload))
-    with (root / "collector.lock").open("a+b") as lock:
-        if not _try_lock_state_file(lock):
-            return 0
-        try:
-            _run_ensure("cursor", quiet=True, if_sources=False, claim_notices=False)
-            # Delayed writes often trail stop. Pending work survives a crash or failed upload.
-            deadline = time.monotonic() + 60
-            for delay in (0.2, 2.0, 5.0):
-                time.sleep(delay)
-                for path in sorted(queue.glob("*.json"), key=lambda entry: entry.stat().st_mtime)[:16]:
-                    if time.monotonic() >= deadline:
-                        return 0
-                    item = mapping(json.loads(path.read_text()))
-                    event = item.get("lifecycle")
-                    if event not in ("session_start", "stop", "session_end", "subagent_stop"):
-                        continue
-                    result = _run_collect(
-                        "cursor",
-                        lifecycle_event=event,
-                        hook_context=_hook_trace_context(item),
-                        include_active=True,
-                        quiet=True,
-                    )
-                    if delay == 5.0 and result == 0:
-                        path.unlink(missing_ok=True)
-        finally:
-            _unlock_state_file(lock)
-    return 0

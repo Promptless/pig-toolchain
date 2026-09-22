@@ -18,6 +18,7 @@ import pytest
 from promptless_instruction_hub.compiler import build_hub, init_hub
 from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import cursor, cursor_db
 from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
+    CollectionResult,
     HookTraceContext,
 )
 from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.cursor_wire import (
@@ -191,18 +192,18 @@ def test_missing_bubble_is_reported_and_retried(database: sqlite3.Connection) ->
 def test_pending_notification_survives_failed_upload(
     database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import cli, traces
+    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import cli
 
     monkeypatch.setattr(cli, "_run_ensure", lambda *args, **kwargs: 0)
-    monkeypatch.setattr(traces, "_run_collect", lambda *args, **kwargs: 1)
-    monkeypatch.setattr(cursor.time, "sleep", lambda _: None)
-    monkeypatch.setattr(cursor.os, "nice", lambda _: None, raising=False)
-    cursor.notify({"conversation_id": "session", "generation_id": "g", "secret": "never persist"}, "stop")
+    monkeypatch.setattr(cli, "_run_collect", lambda *args, **kwargs: CollectionResult.INCOMPLETE)
+    monkeypatch.setattr(cli.time, "sleep", lambda _: None)
+    monkeypatch.setattr(cli.os, "nice", lambda _: None, raising=False)
+    cli._run_cursor_notify({"conversation_id": "session", "generation_id": "g", "secret": "never persist"}, "stop")
     pending = list((cursor.spool_root() / "pending").glob("*.json"))
     assert len(pending) == 1
     assert "never persist" not in pending[0].read_text()
-    monkeypatch.setattr(traces, "_run_collect", lambda *args, **kwargs: 0)
-    cursor.notify({"conversation_id": "session", "generation_id": "g"}, "stop")
+    monkeypatch.setattr(cli, "_run_collect", lambda *args, **kwargs: CollectionResult.COMPLETE)
+    cli._run_cursor_notify({"conversation_id": "session", "generation_id": "g"}, "stop")
     assert not list((cursor.spool_root() / "pending").glob("*.json"))
 
 
@@ -215,7 +216,6 @@ def test_busy_collector_preserves_notification_until_next_wakeup(
     from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import (
         cli,
         storage,
-        traces,
     )
 
     root = cursor.spool_root()
@@ -224,13 +224,13 @@ def test_busy_collector_preserves_notification_until_next_wakeup(
         "import json, sys, time\n"
         "from pathlib import Path\n"
         "from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime "
-        "import cli, cursor, traces\n"
+        "import cli, cursor\n"
         "cursor.spool_root = lambda: Path(sys.argv[1])\n"
         "def unexpected(*args, **kwargs):\n"
         "    raise AssertionError('A busy collector must not enroll or collect')\n"
-        "cli._run_ensure = traces._run_collect = unexpected\n"
+        "cli._run_ensure = cli._run_collect = unexpected\n"
         "started = time.monotonic()\n"
-        "result = cursor.notify({'conversation_id': 'session', 'generation_id': 'g'}, 'stop')\n"
+        "result = cli._run_cursor_notify({'conversation_id': 'session', 'generation_id': 'g'}, 'stop')\n"
         "print(json.dumps({'result': result, 'elapsed': time.monotonic() - started}))\n"
     )
     with (root / "collector.lock").open("a+b") as lock:
@@ -253,12 +253,12 @@ def test_busy_collector_preserves_notification_until_next_wakeup(
             storage._unlock_state_file(lock)
 
     ensure = Mock(return_value=0)
-    collect = Mock(return_value=0)
+    collect = Mock(return_value=CollectionResult.COMPLETE)
     monkeypatch.setattr(cli, "_run_ensure", ensure)
-    monkeypatch.setattr(traces, "_run_collect", collect)
-    monkeypatch.setattr(cursor.time, "sleep", lambda _: None)
-    monkeypatch.setattr(cursor.os, "nice", lambda _: None, raising=False)
-    assert cursor.notify({"conversation_id": "next-session"}, "session_start") == 0
+    monkeypatch.setattr(cli, "_run_collect", collect)
+    monkeypatch.setattr(cli.time, "sleep", lambda _: None)
+    monkeypatch.setattr(cli.os, "nice", lambda _: None, raising=False)
+    assert cli._run_cursor_notify({"conversation_id": "next-session"}, "session_start") == 0
     ensure.assert_called_once()
     assert {call.kwargs["hook_context"].session_id for call in collect.call_args_list} == {"session", "next-session"}
     assert not list((root / "pending").glob("*.json"))

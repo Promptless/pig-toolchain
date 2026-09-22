@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Protocol, cast
 from urllib.parse import urlencode
 
+from . import cursor
 from .contracts import (
     BootstrapAuthError,
     BootstrapError,
@@ -25,6 +26,7 @@ from .contracts import (
     COLLECT_DEADLINE_ENV,
     COLLECT_DEADLINE_SECONDS,
     CollectDeadlineExceeded,
+    CollectionResult,
     HookTraceContext,
     Host,
     HostCredential,
@@ -92,7 +94,7 @@ def _run_collect(
     hook_context: HookTraceContext,
     include_active: bool,
     quiet: bool,
-) -> int:
+) -> CollectionResult:
     plugin_root = _plugin_root()
     metadata = _load_runtime_metadata(plugin_root, host)
     ledger_path = _ledger_path()
@@ -106,7 +108,7 @@ def _run_collect(
     credential = _cached_host_credential(context)
     if credential is None:
         _emit({"status": "trace_upload_skipped", "reason": "not_enrolled", "host": host}, quiet=quiet)
-        return 1 if host == "cursor" else 0
+        return CollectionResult.INCOMPLETE
 
     policy_url = _worker_url(
         worker_base_url,
@@ -117,17 +119,15 @@ def _run_collect(
     except BootstrapAuthError:
         _forget_cached_host_credential(context)
         _emit({"status": "trace_upload_skipped", "reason": "credential_rejected", "host": host}, quiet=quiet)
-        return 1 if host == "cursor" else 0
+        return CollectionResult.INCOMPLETE
     policy = _validate_signed_policy(signed_policy, enrollment_target)
     if _requires_newer_bootstrap(policy.required_bootstrap_version, RUNTIME_VERSION):
         _emit({"status": "blocked", "reason": "bootstrap_upgrade_required", "host": host}, quiet=quiet)
-        return 1 if host == "cursor" else 0
+        return CollectionResult.INCOMPLETE
 
     export_complete = True
     if host == "cursor":
-        from .cursor import prepare_journals
-
-        exported = prepare_journals(hook_context, lifecycle_event)
+        exported = cursor.prepare_journals(hook_context, lifecycle_event)
         hook_context = exported.context
         export_complete = exported.complete
         # Each journal record owns lifecycle and session identity. A hook never
@@ -163,7 +163,7 @@ def _run_collect(
             {"status": "trace_upload_partial", "reason": "collection_deadline_exceeded", "host": host},
             quiet=quiet,
         )
-        return 1 if host == "cursor" else 0
+        return CollectionResult.INCOMPLETE
     uploaded_batch_count += first_current_counts[0]
     uploaded_chunk_count += first_current_counts[1]
     unparsed_record_count += first_current_counts[2]
@@ -204,7 +204,7 @@ def _run_collect(
         deadline_exceeded = not idle_scan_complete
     if not current_transcript_paths and not idle_source_paths and idle_scan_complete:
         _emit({"status": "trace_upload_skipped", "reason": "no_sources", "host": host}, quiet=quiet)
-        return 1 if host == "cursor" else 0
+        return CollectionResult.INCOMPLETE
 
     if not deadline_exceeded:
         try:
@@ -227,10 +227,9 @@ def _run_collect(
         except CollectDeadlineExceeded:
             deadline_exceeded = True
 
+    complete = not (deadline_exceeded or unreadable_source_hashes or not export_complete)
     payload: dict[str, JsonValue] = {
-        "status": "trace_upload_partial"
-        if deadline_exceeded or not export_complete or (host == "cursor" and unreadable_source_hashes)
-        else "trace_upload_complete",
+        "status": "trace_upload_complete" if complete else "trace_upload_partial",
         "host": host,
         "batch_count": uploaded_batch_count,
         "chunk_count": uploaded_chunk_count,
@@ -241,7 +240,7 @@ def _run_collect(
     if deadline_exceeded:
         payload["reason"] = "collection_deadline_exceeded"
     _emit(payload, quiet=quiet)
-    return int(host == "cursor" and (deadline_exceeded or bool(unreadable_source_hashes) or not export_complete))
+    return CollectionResult.COMPLETE if complete else CollectionResult.INCOMPLETE
 
 
 def _lifecycle_event(value: str | None) -> LifecycleEvent:

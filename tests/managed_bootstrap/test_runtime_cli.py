@@ -17,6 +17,11 @@ from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptles
     cli as host_runtime_cli,
 )
 
+from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
+    CollectionResult,
+    Host,
+)
+
 from .helpers import (
     BUNDLE_LOAD_ERROR,
     FIRST_SUCCESS_ACTIVE_FRAGMENT,
@@ -37,6 +42,39 @@ from .helpers import (
     _run_runtime_json,
     _runtime_bundle_sha256,
 )
+
+
+@pytest.mark.parametrize(
+    ("host", "result", "expected_exit"),
+    [
+        ("cursor", CollectionResult.COMPLETE, 0),
+        ("cursor", CollectionResult.INCOMPLETE, 1),
+        ("codex", CollectionResult.COMPLETE, 0),
+        ("codex", CollectionResult.INCOMPLETE, 0),
+        ("claude", CollectionResult.COMPLETE, 0),
+        ("claude", CollectionResult.INCOMPLETE, 0),
+        ("claude-desktop", CollectionResult.COMPLETE, 0),
+        ("claude-desktop", CollectionResult.INCOMPLETE, 0),
+    ],
+)
+def test_collection_outcome_preserves_command_exit_behavior(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    host: Host,
+    result: CollectionResult,
+    expected_exit: int,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(host_runtime_cli, "_run_collect", lambda *args, **kwargs: result)
+    monkeypatch.setattr(host_runtime_cli, "_read_hook_context", lambda: {})
+
+    assert host_runtime_cli.main(["collect", "--host", host, "--quiet"]) == expected_exit
+    assert (
+        host_runtime_cli._run_session_start_collect(
+            host, hook_context=host_runtime_cli._hook_trace_context({}), if_sources=False
+        )
+        == expected_exit
+    )
 
 
 def test_host_runtime_requires_subcommand_and_reports_version(tmp_path: Path) -> None:
