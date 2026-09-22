@@ -111,7 +111,8 @@
           "target": {
             "enum": [
               "claude",
-              "codex"
+              "codex",
+              "cursor"
             ]
           },
           "toolchain_version": {

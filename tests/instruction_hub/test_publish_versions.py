@@ -316,6 +316,7 @@ def test_publish_migrates_immutable_runtime_metadata(tmp_path: Path, schema_vers
     previous_bytes = manifest_path.read_bytes()
 
     schema = json.loads((SCHEMAS / "release-manifest.schema.json").read_text())
+    Draft202012Validator(schema).validate(json.loads((hub_root / "hub.release.json").read_text()))
     Draft202012Validator(schema).validate(json.loads(previous_bytes))
     assert read_release_manifest(manifest_path)[0] == "0.1.0"
     assert resolve_publish_version(hub_root, previous_release_root=previous_root) == "0.1.1"

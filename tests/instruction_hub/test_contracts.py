@@ -105,7 +105,7 @@ def test_release_manifest_schema_matches_generated_contract() -> None:
     ]
     assert managed_runtime_schema["properties"]["id"] == {"const": "host-runtime"}
     assert managed_runtime_schema["properties"]["status"] == {"const": "included"}
-    assert managed_runtime_schema["properties"]["target"] == {"enum": ["claude", "codex"]}
+    assert managed_runtime_schema["properties"]["target"] == {"enum": ["claude", "codex", "cursor"]}
     assert managed_runtime_schema["properties"]["plugin_name"]["maxLength"] == 200
     assert "oneOf" not in managed_runtime_schema
     asset_schema = schema["properties"]["assets"]["items"]
