@@ -67,6 +67,13 @@ def json_value(value: JsonValue) -> JsonValue:
     return value
 
 
+def _retryable_read_error(exc: ValueError | sqlite3.OperationalError) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) or str(exc) in (
+        "cursor_snapshot_budget",
+        "cursor_snapshot_size_limit",
+    )
+
+
 class CursorSnapshot:
     """Exact-key reads under one short transaction with byte and time budgets."""
 
@@ -165,7 +172,9 @@ def read_session(session_id: str, *, deadline: float, offset: int = 0) -> Sessio
         if not isinstance(headers, list):
             raise ValueError("cursor_unsupported_headers")
         records: list[dict[str, JsonValue]] = []
-        bubbles: list[tuple[str, dict[str, JsonValue]]] = []
+        bubbles: list[tuple[int, str, dict[str, JsonValue]]] = []
+        results: dict[str, tuple[JsonValue, str]] = {}
+        retry_offsets: list[int] = []
         next_offset = 0
         complete = True
         if isinstance(headers, list):
@@ -178,6 +187,9 @@ def read_session(session_id: str, *, deadline: float, offset: int = 0) -> Sessio
                     continue
                 try:
                     bubble = snapshot.object(f"bubbleId:{session_id}:{bubble_id}")
+                    results[bubble_id] = _saved_result(
+                        snapshot, mapping(bubble.get("toolFormerData")).get("toolCallBinary")
+                    )
                 except (ValueError, sqlite3.OperationalError) as exc:
                     if str(exc) == "cursor_blob_size_limit":
                         records.append(
@@ -211,16 +223,16 @@ def read_session(session_id: str, *, deadline: float, offset: int = 0) -> Sessio
                         }
                     )
                     complete = False
-                bubbles.append((bubble_id, bubble))
+                bubbles.append((next_offset, bubble_id, bubble))
                 next_offset += 1
             if next_offset >= len(headers):
                 next_offset = 0
-        # UI toolCallBinary is a saved copy. Follow canonical references only
-        # for calls whose UI copy is missing, reserving budget for event export.
+        # A saved UI call can still lack its result. Look up incomplete results
+        # together, within the same bounded snapshot.
         wanted = {
             call_id
-            for _, bubble in bubbles
-            if not mapping(bubble.get("toolFormerData")).get("toolCallBinary")
+            for _, bubble_id, bubble in bubbles
+            if results[bubble_id][1] != "available"
             if (call_id := string(mapping(bubble.get("toolFormerData")).get("toolCallId")))
         }
         canonical: dict[str, bytes] = {}
@@ -228,27 +240,31 @@ def read_session(session_id: str, *, deadline: float, offset: int = 0) -> Sessio
             snapshot.deadline = min(deadline, time.monotonic() + 0.1)
             try:
                 _canonical_tools(snapshot, composer, wanted, canonical)
-            except (ValueError, sqlite3.OperationalError):
-                # Per-event completeness records missing canonical results.
-                pass
+            except (ValueError, sqlite3.OperationalError) as exc:
+                if _retryable_read_error(exc):
+                    retry_offsets.extend(
+                        index
+                        for index, _, bubble in bubbles
+                        if string(mapping(bubble.get("toolFormerData")).get("toolCallId")) in wanted - canonical.keys()
+                    )
             finally:
                 snapshot.deadline = deadline
-        for bubble_id, bubble in bubbles:
-            try:
-                records.extend(_bubble_events(snapshot, bubble_id, bubble, canonical, metadata))
-            except (ValueError, sqlite3.OperationalError):
-                records.append(
-                    {
-                        "event_id": bubble_id + ":capture_gap",
-                        **metadata,
-                        "event": {
-                            "kind": "session_event",
-                            "name": "cursor_capture_gap",
-                            "data": {"reason": "unsupported_or_budget_limited"},
-                        },
-                        "capture": {"source": "database", "completeness": "partial"},
-                    }
-                )
+        for index, bubble_id, bubble in bubbles:
+            result = results[bubble_id]
+            call_id = string(mapping(bubble.get("toolFormerData")).get("toolCallId"))
+            if call_id in canonical:
+                try:
+                    candidate = _saved_result(snapshot, canonical[call_id])
+                    quality = {"available": 3, "partial": 2, "pruned": 1}
+                    if result[0] is None or quality.get(candidate[1], 0) > quality.get(result[1], 0):
+                        result = candidate
+                except (ValueError, sqlite3.OperationalError) as exc:
+                    if _retryable_read_error(exc):
+                        retry_offsets.append(index)
+            records.extend(_bubble_events(bubble_id, bubble, result, metadata))
+        if retry_offsets:
+            next_offset = min(next_offset or len(headers), *retry_offsets)
+            complete = False
         children = composer.get("subagentComposerIds")
         return SessionPage(
             records,
@@ -258,11 +274,45 @@ def read_session(session_id: str, *, deadline: float, offset: int = 0) -> Sessio
         )
 
 
+def _saved_result(snapshot: CursorSnapshot, binary: JsonValue | bytes) -> tuple[JsonValue, str]:
+    """Decode one saved result, propagating temporary storage failures for retry."""
+    if not binary:
+        return None, "missing"
+    try:
+        if isinstance(binary, str):
+            binary = base64.b64decode(binary, validate=True)
+        if not isinstance(binary, bytes):
+            return None, "unsupported"
+        _, output, completeness = tool_result(binary)
+    except ValueError:
+        return None, "unsupported"
+    for ref_key in ("output_blob_id", "content_blob_id", "data_blob_id"):
+        reference = output.pop(ref_key, None)
+        if not isinstance(reference, str):
+            continue
+        try:
+            saved = snapshot.referenced_blob(bytes.fromhex(reference))
+        except ValueError as exc:
+            if _retryable_read_error(exc):
+                raise
+            completeness = "size_limit" if str(exc) == "cursor_blob_size_limit" else "unsupported"
+            continue
+        if saved and ref_key != "data_blob_id":
+            try:
+                output["content"] = saved.decode("utf-8")
+            except UnicodeDecodeError:
+                completeness = "unsupported"
+        else:
+            completeness = "pruned"
+    if any(output.get(key) for key in ("truncated", "exceeded_limit", "elided_chars", "output_location")):
+        completeness = "pruned"
+    return output, completeness
+
+
 def _bubble_events(
-    snapshot: CursorSnapshot,
     bubble_id: str,
     bubble: dict[str, JsonValue],
-    canonical: dict[str, bytes],
+    result: tuple[JsonValue, str],
     metadata: dict[str, JsonValue],
 ) -> list[dict[str, JsonValue]]:
     records: list[dict[str, JsonValue]] = []
@@ -311,39 +361,13 @@ def _bubble_events(
             "input": json_value(tool.get("params", tool.get("rawArgs"))),
         },
     )
-    output: JsonValue = None
-    completeness = "missing"
-    binary = canonical.get(call_id)
-    if binary is None and isinstance(tool.get("toolCallBinary"), str):
-        binary = base64.b64decode(str(tool["toolCallBinary"]), validate=True)
-    if binary:
-        try:
-            _, output, completeness = tool_result(binary)
-        except ValueError:
-            completeness = "unsupported"
+    output, completeness = result
     # The UI copy can retain a result pruned from the canonical blob. Export
     # tool result payloads, never additionalData, whole bubbles, or composer rows.
     result_error = isinstance(output, dict) and bool(
         output.get("error") or output.get("is_error") or output.get("exit_code")
     )
     ui_result = json_value(tool.get("result"))
-    if isinstance(output, dict):
-        for ref_key in ("output_blob_id", "content_blob_id", "data_blob_id"):
-            reference = output.pop(ref_key, None)
-            if isinstance(reference, str):
-                try:
-                    saved = snapshot.referenced_blob(bytes.fromhex(reference))
-                except (ValueError, sqlite3.OperationalError):
-                    saved = b""
-                if saved and ref_key != "data_blob_id":
-                    try:
-                        output["content"] = saved.decode("utf-8")
-                    except UnicodeDecodeError:
-                        completeness = "unsupported"
-                else:
-                    completeness = "pruned"
-        if any(output.get(key) for key in ("truncated", "exceeded_limit", "elided_chars", "output_location")):
-            completeness = "pruned"
     if ui_result is not None and (not output or completeness in ("missing", "unsupported", "pruned", "partial")):
         # These are result values of an explicitly identified tool, not application metadata.
         output = {"saved_result": output, "ui_result": ui_result}

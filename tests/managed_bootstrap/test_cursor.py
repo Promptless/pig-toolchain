@@ -130,7 +130,18 @@ def test_result_families(kind: int, saved: bytes, expected: dict[str, object]) -
     assert tool_result(call(kind, saved))[1] == {**expected, "status": "success"}
 
 
-def test_canonical_reference_graph_and_read_only_wal(database: sqlite3.Connection) -> None:
+@pytest.mark.parametrize(
+    "ui_binary",
+    [
+        None,
+        wire(1, b"") + wire(57, "call-1"),
+        call(1, wire(5, "truncated") + wire(17, 100)),
+        wire(100, b"") + wire(57, "call-1"),
+        b"\x0a\xff",
+    ],
+    ids=["absent", "missing-result", "pruned-result", "unsupported-result", "malformed-result"],
+)
+def test_canonical_reference_graph_and_read_only_wal(database: sqlite3.Connection, ui_binary: bytes | None) -> None:
     put(
         database,
         "composerData:session",
@@ -149,6 +160,7 @@ def test_canonical_reference_graph_and_read_only_wal(database: sqlite3.Connectio
                 "name": "run_terminal_cmd",
                 "toolCallId": "call-1",
                 "params": '{"command":"echo saved"}',
+                "toolCallBinary": base64.b64encode(ui_binary).decode() if ui_binary is not None else None,
             },
             "additionalData": "SECRET",
         },
@@ -163,6 +175,102 @@ def test_canonical_reference_graph_and_read_only_wal(database: sqlite3.Connectio
     assert "SECRET" not in json.dumps(page.records)
     database.commit()  # The collector did not block the editor's writer.
     assert database.execute("SELECT count(*) FROM cursorDiskKV").fetchone()[0] == 5
+
+
+@pytest.mark.parametrize("failure", ["cursor_snapshot_budget", "cursor_snapshot_size_limit", "database is locked"])
+@pytest.mark.parametrize("reference_kind", ["content", "canonical", "canonical-content"])
+def test_transient_result_reads_preserve_retry_and_defer_terminal_event(
+    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, failure: str, reference_kind: str
+) -> None:
+    put(
+        database,
+        "composerData:session",
+        {
+            "fullConversationHeadersOnly": [{"bubbleId": "first"}, {"bubbleId": "tool"}],
+            "conversationState": base64.b64encode(wire(8, b"turn")).decode(),
+        },
+    )
+    put(database, "bubbleId:session:first", {"type": 1, "text": "keep this message"})
+    put(
+        database,
+        "bubbleId:session:tool",
+        {
+            "toolFormerData": {
+                "name": "read_file",
+                "toolCallId": "call-1",
+                "toolCallBinary": base64.b64encode(call(8, wire(10, b"content"))).decode()
+                if reference_kind == "content"
+                else None,
+            }
+        },
+    )
+    put(database, "agentKv:blob:" + b"turn".hex(), wire(1, wire(2, b"step")))
+    put(database, "agentKv:blob:" + b"step".hex(), wire(2, call(8, wire(10, b"content"))))
+    put(database, "agentKv:blob:" + b"content".hex(), b"retained content")
+    context = HookTraceContext(
+        session_id="session",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    original = cursor_database.CursorSnapshot.referenced_blob
+
+    def unavailable(snapshot: cursor_database.CursorSnapshot, reference: bytes) -> bytes:
+        if reference == (b"turn" if reference_kind == "canonical" else b"content"):
+            if failure == "database is locked":
+                raise sqlite3.OperationalError(failure)
+            raise ValueError(failure)
+        return original(snapshot, reference)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(cursor_database.CursorSnapshot, "referenced_blob", unavailable)
+        exported = cursor_capture.prepare_journals(context, "session_end")
+    assert not exported.complete
+    assert exported.context.transcript_path is not None
+    before = exported.context.transcript_path.read_bytes()
+    assert b"keep this message" in before
+    assert b"session_end" not in before
+    state = json.loads((cursor_capture.spool_root() / "scan-state.json").read_text())
+    assert state["offsets"]["session"] == 1
+    exported = cursor_capture.prepare_journals(context, "session_end")
+    assert exported.complete
+    assert exported.context.transcript_path is not None
+    after = exported.context.transcript_path.read_bytes()
+    assert after.startswith(before)
+    assert b"retained content" in after
+    assert b"session_end" in after
+
+
+@pytest.mark.parametrize("retained", [True, False])
+def test_ui_result_blob_is_captured_or_marked_pruned_without_redundant_lookup(
+    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, retained: bool
+) -> None:
+    put(database, "composerData:session", {"fullConversationHeadersOnly": [{"bubbleId": "tool"}]})
+    put(
+        database,
+        "bubbleId:session:tool",
+        {
+            "toolFormerData": {
+                "name": "read_file",
+                "toolCallId": "call-1",
+                "toolCallBinary": base64.b64encode(call(8, wire(10, b"content"))).decode(),
+            }
+        },
+    )
+    if retained:
+        put(database, "agentKv:blob:" + b"content".hex(), b"retained content")
+
+        def unexpected(*args, **kwargs):
+            raise AssertionError("A complete UI result needs no canonical lookup")
+
+        monkeypatch.setattr(cursor_database, "_canonical_tools", unexpected)
+    page = cursor_database.read_session("session", deadline=time.monotonic() + 1)
+    assert page.complete
+    assert page.records[-1]["capture"]["completeness"] == ("available" if retained else "pruned")
+    if retained:
+        assert page.records[-1]["event"]["output"]["content"] == "retained content"
 
 
 def test_exclusive_database_lock_returns_without_waiting(database: sqlite3.Connection) -> None:
@@ -208,6 +316,62 @@ def test_pending_notification_survives_failed_upload(
     monkeypatch.setattr(cli, "_run_collect", lambda *args, **kwargs: CollectionResult.COMPLETE)
     cli._run_cursor_notify({"conversation_id": "session", "generation_id": "g"}, "stop")
     assert not list((cursor_capture.spool_root() / "pending").glob("*.json"))
+
+
+def test_failed_notifications_rotate_without_starving_current_or_queued_work(
+    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import cli
+
+    queue = cursor_capture.spool_root() / "pending"
+    queue.mkdir(parents=True)
+    for index in range(32):
+        path = queue / f"old-{index}.json"
+        path.write_text(json.dumps({"conversation_id": f"old-{index}", "lifecycle": "stop"}))
+        os.utime(path, (index + 1, index + 1))
+    attempted = []
+
+    def collect(*args, hook_context, **kwargs):
+        attempted.append(hook_context.session_id)
+        return CollectionResult.COMPLETE if hook_context.session_id == "current" else CollectionResult.INCOMPLETE
+
+    monkeypatch.setattr(cli, "_run_ensure", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(cli, "_run_collect", collect)
+    monkeypatch.setattr(cli.time, "sleep", lambda _: None)
+    monkeypatch.setattr(cli.os, "nice", lambda _: None, raising=False)
+    assert cli._run_cursor_notify({"conversation_id": "current"}, "stop") == 0
+    assert attempted[0] == "current"
+    assert set(attempted) == {"current", *(f"old-{index}" for index in range(32))}
+    assert len(list(queue.glob("*.json"))) == 32
+    assert all(path.stat().st_mtime > 32 for path in queue.glob("*.json"))
+
+
+def test_full_notification_queue_can_drain_and_retain_new_work(
+    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import cli
+
+    queue = cursor_capture.spool_root() / "pending"
+    queue.mkdir(parents=True)
+    for index in range(2):
+        (queue / f"old-{index}.json").write_text(json.dumps({"conversation_id": f"old-{index}", "lifecycle": "stop"}))
+    attempted = []
+
+    def collect(*args, hook_context, **kwargs):
+        assert len(list(queue.glob("*.json"))) <= 2
+        attempted.append(hook_context.session_id)
+        return CollectionResult.COMPLETE
+
+    monkeypatch.setattr(cli, "_MAX_CURSOR_PENDING", 2)
+    monkeypatch.setattr(cli, "_run_ensure", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(cli, "_run_collect", collect)
+    monkeypatch.setattr(cli.time, "sleep", lambda _: None)
+    monkeypatch.setattr(cli.os, "nice", lambda _: None, raising=False)
+    assert cli._run_cursor_notify({"conversation_id": "current"}, "stop") == 0
+    assert {"old-0", "old-1"} <= set(attempted)
+    assert cli._run_cursor_notify({"conversation_id": "current"}, "stop") == 0
+    assert "current" in attempted
+    assert not list(queue.glob("*.json"))
 
 
 def test_busy_collector_preserves_notification_until_next_wakeup(

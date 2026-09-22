@@ -314,21 +314,25 @@ def _run_cursor_notify(context: dict[str, JsonValue], lifecycle: LifecycleEvent)
     payload["lifecycle"] = lifecycle
     notification_id = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     queued_path = queue / (notification_id + ".json")
-    if not queued_path.exists() and sum(1 for _ in queue.glob("*.json")) >= _MAX_CURSOR_PENDING:
-        raise ValueError("cursor_pending_limit")
-    _atomic_write_text(queued_path, json.dumps(payload))
+    queued = queued_path.exists() or sum(1 for _ in queue.glob("*.json")) < _MAX_CURSOR_PENDING
+    if queued:
+        _atomic_write_text(queued_path, json.dumps(payload))
     with (root / "collector.lock").open("a+b") as lock:
         if not _try_lock_state_file(lock):
-            return 0
+            return int(not queued)
         try:
             _run_ensure("cursor", quiet=True, if_sources=False, claim_notices=False)
             # Delayed writes often trail stop. Pending work survives a crash or failed upload.
             deadline = time.monotonic() + 60
             for delay in (0.2, 2.0, 5.0):
                 time.sleep(delay)
-                for path in sorted(queue.glob("*.json"), key=lambda entry: entry.stat().st_mtime)[:16]:
+                for path in sorted(
+                    queue.glob("*.json"), key=lambda entry: (entry != queued_path, entry.stat().st_mtime)
+                )[:16]:
                     if time.monotonic() >= deadline:
-                        return 0
+                        return int(not queued)
+                    # Rotate attempted entries so failed sessions cannot starve the queue.
+                    path.touch()
                     item = _json_mapping_or_empty(json.loads(path.read_text()))
                     event = item.get("lifecycle")
                     if event not in ("session_start", "stop", "session_end", "subagent_stop"):
@@ -342,6 +346,11 @@ def _run_cursor_notify(context: dict[str, JsonValue], lifecycle: LifecycleEvent)
                     )
                     if delay == 5.0 and result is CollectionResult.COMPLETE:
                         path.unlink(missing_ok=True)
+            if not queued:
+                # A full queue must still drain before rejecting a new notification.
+                if sum(1 for _ in queue.glob("*.json")) >= _MAX_CURSOR_PENDING:
+                    raise ValueError("cursor_pending_limit")
+                _atomic_write_text(queued_path, json.dumps(payload))
         finally:
             _unlock_state_file(lock)
     return 0
