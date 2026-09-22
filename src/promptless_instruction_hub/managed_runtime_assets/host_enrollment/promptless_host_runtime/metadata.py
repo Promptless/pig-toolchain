@@ -21,15 +21,19 @@ from .validation import _normalize_base_url, _string_value
 
 
 def _resolve_host(host_arg: str) -> Host:
-    if host_arg == "codex" or host_arg == "claude" or host_arg == "claude-desktop":
+    if host_arg in ("codex", "claude", "claude-desktop", "cursor"):
         return host_arg
+    if os.environ.get("CURSOR_PLUGIN_ROOT"):
+        return "cursor"
     if os.environ.get("CLAUDE_PLUGIN_ROOT"):
         return "claude"
     return "codex"
 
 
 def _plugin_root() -> Path | None:
-    raw_root = os.environ.get("PLUGIN_ROOT") or os.environ.get("CLAUDE_PLUGIN_ROOT")
+    raw_root = (
+        os.environ.get("CURSOR_PLUGIN_ROOT") or os.environ.get("PLUGIN_ROOT") or os.environ.get("CLAUDE_PLUGIN_ROOT")
+    )
     if raw_root is None or raw_root.strip() == "":
         return None
     return Path(raw_root).expanduser()
@@ -93,7 +97,7 @@ def _load_runtime_metadata(plugin_root: Path | None, host: Host) -> RuntimeMetad
 def _self_sha256() -> str:
     package_root = Path(__file__).resolve().parent
     bundle_root = package_root.parent
-    files = [bundle_root / RUNTIME_EXECUTABLE]
+    files = [bundle_root / RUNTIME_EXECUTABLE, bundle_root / "cursor-hook.cjs"]
     files.extend(
         path
         for path in package_root.rglob("*")

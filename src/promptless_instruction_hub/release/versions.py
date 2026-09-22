@@ -490,8 +490,8 @@ def _validate_managed_runtimes(manifest_path: Path, runtimes: list[JsonValue], k
             msg = f"{manifest_path}: {runtime_path}.status must be included"
             raise ValueError(msg)
         target = runtime["target"]
-        if target not in {"claude", "codex"}:
-            msg = f"{manifest_path}: {runtime_path}.target must be claude or codex"
+        if target not in {"claude", "codex", "cursor"}:
+            msg = f"{manifest_path}: {runtime_path}.target must be claude, codex, or cursor"
             raise ValueError(msg)
         for string_key in set(runtime) - {"id", "status", "target", "sha256"}:
             value = runtime[string_key]

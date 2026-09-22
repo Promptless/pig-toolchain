@@ -55,7 +55,7 @@ def _diagnostic_log_path(home: Path) -> Path:
 
 def _runtime_bundle_sha256(bin_root: Path) -> str:
     package_root = bin_root / HOST_RUNTIME_PACKAGE
-    files = [bin_root / HOST_RUNTIME_BIN]
+    files = [bin_root / HOST_RUNTIME_BIN, bin_root / "cursor-hook.cjs"]
     files.extend(
         path
         for path in package_root.rglob("*")
@@ -207,7 +207,7 @@ def _run_collect(
         check=False,
         timeout=timeout_seconds,
     )
-    assert result.returncode == 0
+    assert result.returncode == 0, (result.stdout, result.stderr)
     assert "plihost_localcredential" not in result.stdout
     assert "plihost_localcredential" not in result.stderr
     assert "plihenroll_devicecode" not in result.stdout
@@ -599,7 +599,7 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
         target = parse_qs(parsed.query).get("target")
         if (
             parsed.path != "/v0/host-enrollment/policy"
-            or target not in (["codex"], ["claude"], ["claude-desktop"])
+            or target not in (["codex"], ["claude"], ["claude-desktop"], ["cursor"])
             or self.headers.get("Authorization") != "Bearer plihost_localcredential"
         ):
             self.send_response(401)
@@ -622,7 +622,7 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
         if parsed.path == "/v0/traces/batches":
             target = parse_qs(parsed.query).get("target")
             if (
-                target not in (["codex"], ["claude"], ["claude-desktop"])
+                target not in (["codex"], ["claude"], ["claude-desktop"], ["cursor"])
                 or self.headers.get("Authorization") != "Bearer plihost_localcredential"
             ):
                 self.send_response(401)

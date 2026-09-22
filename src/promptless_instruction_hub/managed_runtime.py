@@ -34,9 +34,9 @@ HOST_RUNTIME_SESSION_START_HOOK_TIMEOUT_SECONDS = 30
 # https://learn.chatgpt.com/docs/hooks#config-shape
 HOST_RUNTIME_TERMINAL_HOOK_TIMEOUT_SECONDS = 3
 HOST_RUNTIME_CHANNEL = "stable"
-HOST_RUNTIME_VERSION = "0.2.9"
+HOST_RUNTIME_VERSION = "0.3.0"
 MANAGED_RUNTIME_MANIFEST = MANAGED_RUNTIME_MANIFEST_PATH
-SUPPORTED_HOST_RUNTIME_TARGETS: tuple[Harness, ...] = ("claude", "codex")
+SUPPORTED_HOST_RUNTIME_TARGETS: tuple[Harness, ...] = ("claude", "codex", "cursor")
 MISSING_RUNTIME_ROOT_MESSAGE = (
     "Promptless Instruction Hub hook could not find its plugin root. "
     "Update the host CLI or reinstall the Promptless plugin."
@@ -155,6 +155,7 @@ def _copy_runtime_bundle(target_root: Path) -> None:
     executable_destination = runtime_root / HOST_RUNTIME_EXECUTABLE
     shutil.copy2(_EXECUTABLE_SOURCE, executable_destination)
     executable_destination.chmod(0o755)
+    shutil.copy2(_ASSET_ROOT / "cursor-hook.cjs", runtime_root / "cursor-hook.cjs")
 
     package_destination = runtime_root / HOST_RUNTIME_PACKAGE
     if package_destination.exists():
@@ -186,7 +187,7 @@ def _runtime_bundle_files(bundle_root: Path) -> tuple[Path, ...]:
     )
     return tuple(
         sorted(
-            (bundle_root / HOST_RUNTIME_EXECUTABLE, *package_files),
+            (bundle_root / HOST_RUNTIME_EXECUTABLE, bundle_root / "cursor-hook.cjs", *package_files),
             key=lambda path: path.relative_to(bundle_root).as_posix(),
         )
     )
@@ -204,6 +205,25 @@ def _write_host_runtime_hooks(target_root: Path, target: Harness) -> None:
     if not isinstance(hooks, dict):
         msg = f"{hook_path} field hooks must be a JSON object"
         raise InstructionHubError(msg)
+    if target == "cursor":
+        hook_config["version"] = 1
+        for event, lifecycle in (
+            ("sessionStart", "session_start"),
+            ("stop", "stop"),
+            ("sessionEnd", "session_end"),
+            ("subagentStop", "subagent_stop"),
+        ):
+            entries = hooks.setdefault(event, [])
+            if not isinstance(entries, list):
+                raise InstructionHubError(f"{hook_path} field hooks.{event} must be an array")
+            entries.append(
+                {
+                    "command": f'node "${{CURSOR_PLUGIN_ROOT}}/runtime/cursor-hook.cjs" {lifecycle}',
+                    "timeout": 0.25,
+                }
+            )
+        write_json(hook_path, hook_config)
+        return
     for event_name in _host_runtime_hook_events():
         event_hooks = hooks.setdefault(event_name, [])
         if not isinstance(event_hooks, list):

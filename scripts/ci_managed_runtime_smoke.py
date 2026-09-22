@@ -25,6 +25,10 @@ RUNTIME_MODULES = (
     "__init__.py",
     "cli.py",
     "contracts.py",
+    "cursor/__init__.py",
+    "cursor/capture.py",
+    "cursor/database.py",
+    "cursor/wire.py",
     "enrollment.py",
     "host_config.py",
     "metadata.py",
@@ -41,10 +45,12 @@ EXPECTED_ARCHIVE_ASSETS = {
     f"{RUNTIME_ASSET_ROOT}/__init__.py",
     f"{HOST_ASSET_ROOT}/__init__.py",
     f"{HOST_ASSET_ROOT}/{RUNTIME_EXECUTABLE}",
+    f"{HOST_ASSET_ROOT}/cursor-hook.cjs",
     *(f"{HOST_ASSET_ROOT}/{RUNTIME_PACKAGE}/{module}" for module in RUNTIME_MODULES),
 }
 EXPECTED_GENERATED_BUNDLE = {
     RUNTIME_EXECUTABLE,
+    "cursor-hook.cjs",
     *(f"{RUNTIME_PACKAGE}/{module}" for module in RUNTIME_MODULES),
 }
 
@@ -146,7 +152,7 @@ def _build_hub(toolchain: Sequence[os.PathLike[str] | str], workspace: Path) -> 
 
 
 def _bundle_sha256(bin_root: Path) -> str:
-    files = [bin_root / RUNTIME_EXECUTABLE]
+    files = [bin_root / RUNTIME_EXECUTABLE, bin_root / "cursor-hook.cjs"]
     files.extend(
         path
         for path in (bin_root / RUNTIME_PACKAGE).rglob("*")

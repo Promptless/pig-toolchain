@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import argparse
 import errno
+import hashlib
+import json
 import os
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -17,8 +20,11 @@ from urllib.parse import urlencode
 from .contracts import (
     BootstrapAuthError,
     BootstrapError,
+    CollectionResult,
     HookTraceContext,
     Host,
+    JsonValue,
+    LifecycleEvent,
     MANAGED_RUNTIME_ID,
     RUNTIME_CHANNEL,
     RUNTIME_EXECUTABLE,
@@ -26,6 +32,7 @@ from .contracts import (
     RuntimeMetadata,
     _enrollment_host,
 )
+from .cursor import capture as cursor_capture
 from .enrollment import (
     _credential_with_policy_identity,
     _enroll_host_credential,
@@ -60,6 +67,7 @@ from .output import (
 )
 from .redaction import _redact_text
 from .status import _reset_host_state, _status_payload
+from .storage import _atomic_write_text, _try_lock_state_file, _unlock_state_file
 from .traces import (
     _hook_trace_context,
     _lifecycle_event,
@@ -67,8 +75,10 @@ from .traces import (
     _read_hook_input,
     _run_collect,
 )
-from .validation import _requires_newer_bootstrap
+from .validation import _json_mapping_or_empty, _requires_newer_bootstrap
 from .worker import _get_json, _post_check_in, _validate_signed_policy, _worker_url
+
+_MAX_CURSOR_PENDING = 4096
 
 _WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 _WINDOWS_DETACHED_PROCESS = 0x00000008
@@ -78,6 +88,12 @@ def main(argv: list[str] | None = None) -> int:
     """Run the requested host-runtime command."""
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
+    if args.command == "cursor-notify":
+        try:
+            return _run_cursor_notify(_read_hook_context(), _lifecycle_event(args.lifecycle))
+        except (BootstrapError, OSError, ValueError, urllib.error.URLError) as exc:
+            _record_collector_failure("cursor", exit_code=None, error_code=_exception_error_code(exc))
+            return 1
     if args.command == "version":
         return _run_version_command(json_output=args.json)
     host = _resolve_host(args.host)
@@ -131,6 +147,10 @@ def main(argv: list[str] | None = None) -> int:
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=RUNTIME_EXECUTABLE, description="Promptless host runtime")
     subcommands = parser.add_subparsers(dest="command", required=True)
+    cursor_parser = subcommands.add_parser("cursor-notify", help=argparse.SUPPRESS)
+    cursor_parser.add_argument(
+        "--lifecycle", required=True, choices=("session_start", "stop", "session_end", "subagent_stop")
+    )
 
     ensure_parser = subcommands.add_parser("ensure", help="Enroll if needed and ensure host telemetry config")
     _add_host_argument(ensure_parser)
@@ -197,7 +217,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _add_host_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--host", choices=("auto", "codex", "claude", "claude-desktop"), default="auto")
+    parser.add_argument("--host", choices=("auto", "codex", "claude", "claude-desktop", "cursor"), default="auto")
 
 
 def _run_session_start_command(host: Host, *, if_sources: bool, detach: bool, supervised: bool) -> int:
@@ -252,18 +272,88 @@ def _run_collect_command(
             return 0
         event = _lifecycle_event(lifecycle)
         hook_context = _hook_trace_context(_read_hook_context())
-        return _run_collect(
+        result = _run_collect(
             host,
             lifecycle_event=event,
             hook_context=hook_context,
             include_active=include_active,
             quiet=quiet,
         )
+        return _collection_exit_code(host, result)
     except (BootstrapError, OSError, ValueError, urllib.error.URLError) as exc:
         _emit({"status": "error", "host": host, "message": _redact_text(str(exc))}, quiet=quiet)
         return 0
     finally:
         _flush_control_output()
+
+
+def _collection_exit_code(host: Host, result: CollectionResult) -> int:
+    # Existing hooks fail open; Cursor background commands signal pending work.
+    return int(host == "cursor" and result is CollectionResult.INCOMPLETE)
+
+
+def _run_cursor_notify(context: dict[str, JsonValue], lifecycle: LifecycleEvent) -> int:
+    """Persist a notification and coalesce detached collectors with a nonblocking lock."""
+    root = cursor_capture.spool_root()
+    queue = root / "pending"
+    queue.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name != "nt":
+        os.nice(10)
+    # Hook payloads contain metadata only. Persist only fields consumed by our adapter.
+    allowed = (
+        "conversation_id",
+        "generation_id",
+        "transcript_path",
+        "agent_transcript_path",
+        "parent_conversation_id",
+        "agent_id",
+    )
+    payload: dict[str, JsonValue] = {
+        key: value for key in allowed if isinstance(value := context.get(key), str) and len(value) <= 4096
+    }
+    payload["lifecycle"] = lifecycle
+    notification_id = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    queued_path = queue / (notification_id + ".json")
+    queued = queued_path.exists() or sum(1 for _ in queue.glob("*.json")) < _MAX_CURSOR_PENDING
+    if queued:
+        _atomic_write_text(queued_path, json.dumps(payload))
+    with (root / "collector.lock").open("a+b") as lock:
+        if not _try_lock_state_file(lock):
+            return int(not queued)
+        try:
+            _run_ensure("cursor", quiet=True, if_sources=False, claim_notices=False)
+            # Delayed writes often trail stop. Pending work survives a crash or failed upload.
+            deadline = time.monotonic() + 60
+            for delay in (0.2, 2.0, 5.0):
+                time.sleep(delay)
+                for path in sorted(
+                    queue.glob("*.json"), key=lambda entry: (entry != queued_path, entry.stat().st_mtime)
+                )[:16]:
+                    if time.monotonic() >= deadline:
+                        return int(not queued)
+                    # Rotate attempted entries so failed sessions cannot starve the queue.
+                    path.touch()
+                    item = _json_mapping_or_empty(json.loads(path.read_text()))
+                    event = item.get("lifecycle")
+                    if event not in ("session_start", "stop", "session_end", "subagent_stop"):
+                        continue
+                    result = _run_collect(
+                        "cursor",
+                        lifecycle_event=event,
+                        hook_context=_hook_trace_context(item),
+                        include_active=True,
+                        quiet=True,
+                    )
+                    if delay == 5.0 and result is CollectionResult.COMPLETE:
+                        path.unlink(missing_ok=True)
+            if not queued:
+                # A full queue must still drain before rejecting a new notification.
+                if sum(1 for _ in queue.glob("*.json")) >= _MAX_CURSOR_PENDING:
+                    raise ValueError("cursor_pending_limit")
+                _atomic_write_text(queued_path, json.dumps(payload))
+        finally:
+            _unlock_state_file(lock)
+    return 0
 
 
 def _collector_command_args(
@@ -402,9 +492,10 @@ def _run_session_start_collect(
     except (BootstrapError, OSError, ValueError, urllib.error.URLError) as exc:
         _record_collector_failure(host, exit_code=None, error_code=_exception_error_code(exc))
         return 1
-    if result != 0:
-        _record_collector_failure(host, exit_code=result, error_code=None)
-    return result
+    exit_code = _collection_exit_code(host, result)
+    if exit_code != 0:
+        _record_collector_failure(host, exit_code=exit_code, error_code=None)
+    return exit_code
 
 
 def _launch_detached_collect(
