@@ -562,6 +562,50 @@ def test_pages_resume_before_terminal_and_child_hook_never_closes_parent(
     assert rows[-1]["event"]["name"] == "subagent_stop"
 
 
+@pytest.mark.parametrize("nested", [False, True])
+def test_subagent_traversal_resumes_and_finishes_across_bounded_passes(
+    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, nested: bool
+) -> None:
+    monkeypatch.setattr(cursor_database, "PAGE_SIZE", 1)
+    children = [f"child-{index}" for index in range(16 if nested else 32)]
+    descendants = {child: [child + "-a", child + "-b"] if nested else [] for child in children}
+    sessions = {"parent": children, **descendants}
+    sessions.update({grandchild: [] for grandchildren in descendants.values() for grandchild in grandchildren})
+    for session_id, child_ids in sessions.items():
+        put(
+            database,
+            "composerData:" + session_id,
+            {"fullConversationHeadersOnly": [{"bubbleId": "a"}], "subagentComposerIds": child_ids},
+        )
+        put(database, f"bubbleId:{session_id}:a", {"type": 1, "text": session_id})
+    context = HookTraceContext(
+        session_id="parent",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    assert not cursor_capture.prepare_journals(context, "session_end").complete
+    put(
+        database,
+        "composerData:parent",
+        {"fullConversationHeadersOnly": [{"bubbleId": "a"}], "subagentComposerIds": [*children, "new-child"]},
+    )
+    put(database, "composerData:new-child", {"fullConversationHeadersOnly": [{"bubbleId": "a"}, {"bubbleId": "b"}]})
+    for bubble_id in ("a", "b"):
+        put(database, "bubbleId:new-child:" + bubble_id, {"type": 1, "text": bubble_id})
+    for _ in range(4):
+        export = cursor_capture.prepare_journals(context, "session_end")
+        if export.complete:
+            break
+    assert export.complete
+    journals = cursor_capture.spool_root() / "journals"
+    assert {path.stem for path in journals.glob("*.jsonl")} == set(sessions) | {"new-child"}
+    rows = [json.loads(line) for line in (journals / "new-child.jsonl").read_text().splitlines()]
+    assert [row["event"]["text"] for row in rows] == ["a", "b"]
+
+
 def test_cursor_hooks_detach_slow_work_and_close_output_pipes(tmp_path: Path) -> None:
     node = shutil.which("node")
     if node is None:
@@ -618,6 +662,36 @@ def test_unsaved_session_remains_pending(database: sqlite3.Connection) -> None:
     exported = cursor_capture.prepare_journals(context, "session_end")
     assert not exported.complete
     assert not list((cursor_capture.spool_root() / "journals").glob("*.jsonl"))
+
+
+@pytest.mark.parametrize("discovered", [False, True])
+def test_pending_subagent_does_not_prevent_sessions_refreshing(
+    database: sqlite3.Connection, tmp_path: Path, discovered: bool
+) -> None:
+    if discovered:
+        transcript = tmp_path / "transcripts" / "idle.jsonl"
+        transcript.parent.mkdir()
+        transcript.touch()
+    put(
+        database,
+        "composerData:parent",
+        {"fullConversationHeadersOnly": [], "subagentComposerIds": ["missing"] if discovered else ["missing", "idle"]},
+    )
+    put(database, "composerData:idle", {"fullConversationHeadersOnly": [{"bubbleId": "a"}]})
+    context = HookTraceContext(
+        session_id="parent",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    for text in ("old", "new"):
+        put(database, "bubbleId:idle:a", {"type": 1, "text": text})
+        assert not cursor_capture.prepare_journals(context, "session_end").complete
+    path = cursor_capture.spool_root() / "journals" / "idle.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [row["event"]["text"] for row in rows] == ["old", "new"]
 
 
 def test_cursor_collect_uploads_only_acknowledged_journal_ranges(tmp_path: Path) -> None:

@@ -216,6 +216,10 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
     state_path = spool_root() / "scan-state.json"
     state = mapping(json.loads(state_path.read_text())) if state_path.exists() else {}
     offsets = mapping(state.get("offsets"))
+    saved_pending = state.get("pending")
+    saved_completed = state.get("completed")
+    resumed = [key for key in saved_pending if isinstance(key, str)] if isinstance(saved_pending, list) else []
+    completed = {key for key in saved_completed if isinstance(key, str)} if isinstance(saved_completed, list) else set()
     after = string(state.get("after")) or ""
     discovered: dict[str, Path] = {}
     discovery_deadline = time.monotonic() + 1
@@ -230,12 +234,16 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
     ordered = sorted(discovered)
     ordered = [key for key in ordered if key > after] + [key for key in ordered if key <= after]
     pending: list[tuple[str, Path | None]] = [(subject, subject_path)] if subject else []
-    pending.extend((key, discovered[key]) for key in ordered[:16])
+    scheduled = {subject} if subject else set()
+    for key in [*resumed, *ordered[:16]]:
+        if key not in scheduled:
+            pending.append((key, discovered.get(key)))
+            scheduled.add(key)
     seen: set[str] = set()
+    retry: list[str] = []
     deadline = time.monotonic() + 5
     current: Path | None = None
     errors: dict[str, int] = {}
-    complete = True
     while pending and time.monotonic() < deadline and len(seen) < 32:
         session_id, transcript = pending.pop(0)
         if session_id in seen or not SESSION_PATTERN.fullmatch(session_id):
@@ -250,16 +258,17 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
                 offset=offset if isinstance(offset, int) else 0,
             )
             observations = page.records
-            pending.extend((child, None) for child in page.children if child not in seen)
+            for child in page.children:
+                if child not in scheduled and child not in completed:
+                    pending.append((child, discovered.get(child)))
+                    scheduled.add(child)
             next_offset = page.next_offset
             page_complete = page.complete
-            complete = complete and page_complete
         except (sqlite3.Error, OSError, ValueError) as exc:
             reason = "database_busy" if isinstance(exc, sqlite3.OperationalError) else "decode_or_budget"
             errors[reason] = errors.get(reason, 0) + 1
             observations = []
             next_offset = None
-            complete = False
         if not observations:
             try:
                 observations = _fallback(transcript)
@@ -286,8 +295,24 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
             offsets[session_id] = next_offset
         if session_id != subject:
             after = session_id
-        # Only advance after fsync. Replaying after a crash is idempotent.
-        _atomic_write_text(state_path, json.dumps({"offsets": offsets, "after": after}))
+        if page_complete:
+            completed.add(session_id)
+        else:
+            completed.discard(session_id)
+            retry.append(session_id)
+    remaining = [session_id for session_id, _ in pending] + retry
+    # Save traversal progress only after journal fsyncs. Crash replay is idempotent.
+    _atomic_write_text(
+        state_path,
+        json.dumps(
+            {
+                "offsets": offsets,
+                "after": after,
+                "pending": remaining,
+                "completed": sorted(completed) if pending else [],
+            }
+        ),
+    )
     _atomic_write_text(
         spool_root() / "diagnostics.json",
         json.dumps(
@@ -295,7 +320,7 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
                 "adapter": ADAPTER_VERSION,
                 "sessions_observed": len(seen),
                 "errors": errors,
-                "pending_sessions": len(pending),
+                "pending_sessions": len(remaining),
                 "discovery_truncated": discovery_truncated,
                 "observed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             }
@@ -303,5 +328,5 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
     )
     return CursorExport(
         replace(context, transcript_path=current, agent_transcript_path=None, session_id=subject),
-        complete and not pending,
+        not remaining,
     )
