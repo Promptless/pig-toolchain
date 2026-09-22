@@ -222,7 +222,7 @@ def read_session(session_id: str, *, deadline: float, offset: int = 0) -> Sessio
                             "capture": {"source": "database", "completeness": "missing"},
                         }
                     )
-                    complete = False
+                    retry_offsets.append(next_offset)
                 bubbles.append((next_offset, bubble_id, bubble))
                 next_offset += 1
             if next_offset >= len(headers):

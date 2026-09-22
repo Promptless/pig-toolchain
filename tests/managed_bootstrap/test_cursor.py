@@ -300,6 +300,46 @@ def test_missing_bubble_is_reported_and_retried(database: sqlite3.Connection) ->
     assert cursor_database.read_session("session", deadline=time.monotonic() + 0.5).complete
 
 
+@pytest.mark.parametrize("missing_index", [0, 2])
+def test_missing_bubble_across_pages_delays_terminal_until_recovered(
+    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, missing_index: int
+) -> None:
+    monkeypatch.setattr(cursor_database, "PAGE_SIZE", 2)
+    put(
+        database,
+        "composerData:session",
+        {"fullConversationHeadersOnly": [{"bubbleId": str(index)} for index in range(5)]},
+    )
+    for index in range(5):
+        if index != missing_index:
+            put(database, f"bubbleId:session:{index}", {"type": 1, "text": str(index)})
+    context = HookTraceContext(
+        session_id="session",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    for _ in range(4):
+        export = cursor_capture.prepare_journals(context, "session_end")
+        assert not export.complete
+        assert export.context.transcript_path is not None
+        assert "session_end" not in export.context.transcript_path.read_text()
+
+    put(database, f"bubbleId:session:{missing_index}", {"type": 1, "text": str(missing_index)})
+    for _ in range(3):
+        export = cursor_capture.prepare_journals(context, "session_end")
+        if export.complete:
+            break
+    assert export.complete
+    assert export.context.transcript_path is not None
+    rows = [json.loads(line) for line in export.context.transcript_path.read_text().splitlines()]
+    messages = [row["event"]["text"] for row in rows if row["event"]["kind"] == "user_message"]
+    assert sorted(messages) == [str(index) for index in range(5)]
+    assert rows[-1]["event"]["name"] == "session_end"
+
+
 def test_pending_notification_survives_failed_upload(
     database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
