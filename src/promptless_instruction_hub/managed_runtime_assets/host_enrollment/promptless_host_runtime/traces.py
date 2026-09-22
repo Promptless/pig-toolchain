@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Protocol, cast
 from urllib.parse import urlencode
 
-from . import cursor
 from .contracts import (
     BootstrapAuthError,
     BootstrapError,
@@ -52,6 +51,7 @@ from .contracts import (
     WorkerResponseError,
     _enrollment_host,
 )
+from .cursor import capture as cursor_capture
 from .enrollment import (
     _cached_host_credential,
     _enrollment_context,
@@ -127,7 +127,7 @@ def _run_collect(
 
     export_complete = True
     if host == "cursor":
-        exported = cursor.prepare_journals(hook_context, lifecycle_event)
+        exported = cursor_capture.prepare_journals(hook_context, lifecycle_event)
         hook_context = exported.context
         export_complete = exported.complete
         # Each journal record owns lifecycle and session identity. A hook never

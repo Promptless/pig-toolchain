@@ -12,7 +12,6 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import cursor, cursor_db
 from .contracts import (
     BootstrapError,
     CLAUDE_DESKTOP_TRACE_DIR_NAMES,
@@ -24,6 +23,8 @@ from .contracts import (
     MANAGED_BEGIN,
     MANAGED_END,
 )
+from .cursor import capture as cursor_capture
+from .cursor import database as cursor_database
 from .redaction import _redact_text
 from .storage import _atomic_write_text, _ledger_path
 from .validation import _non_empty, _string_value
@@ -31,7 +32,7 @@ from .validation import _non_empty, _string_value
 
 def _native_trace_globs(host: Host) -> tuple[str, ...]:
     if host == "cursor":
-        return (str(cursor.spool_root() / "journals/*.jsonl"),)
+        return (str(cursor_capture.spool_root() / "journals/*.jsonl"),)
     if host == "claude":
         return (str(Path.home() / ".claude/projects/**/*.jsonl"),)
     if host == "claude-desktop":
@@ -68,7 +69,7 @@ def _claude_desktop_trace_roots() -> tuple[Path, ...]:
 
 def _has_native_trace_sources(host: Host) -> bool:
     if host == "cursor":
-        return cursor_db.database_path().is_file()
+        return cursor_database.database_path().is_file()
     for pattern in _native_trace_globs(host):
         for raw_path in glob.iglob(pattern, recursive=True):
             if Path(raw_path).is_file():
@@ -78,7 +79,7 @@ def _has_native_trace_sources(host: Host) -> bool:
 
 def _host_config_status(host: Host) -> dict[str, JsonValue]:
     if host == "cursor":
-        path = cursor_db.database_path()
+        path = cursor_database.database_path()
         return {"path": str(path), "exists": path.is_file(), "managed_config_detected": False}
     if host == "codex":
         return _codex_config_status()

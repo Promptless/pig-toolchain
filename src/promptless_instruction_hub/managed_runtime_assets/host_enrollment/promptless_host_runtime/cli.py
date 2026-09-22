@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import BinaryIO, cast
 from urllib.parse import urlencode
 
-from . import cursor
 from .contracts import (
     BootstrapAuthError,
     BootstrapError,
@@ -33,6 +32,7 @@ from .contracts import (
     RuntimeMetadata,
     _enrollment_host,
 )
+from .cursor import capture as cursor_capture
 from .enrollment import (
     _credential_with_policy_identity,
     _enroll_host_credential,
@@ -294,7 +294,7 @@ def _collection_exit_code(host: Host, result: CollectionResult) -> int:
 
 def _run_cursor_notify(context: dict[str, JsonValue], lifecycle: LifecycleEvent) -> int:
     """Persist a notification and coalesce detached collectors with a nonblocking lock."""
-    root = cursor.spool_root()
+    root = cursor_capture.spool_root()
     queue = root / "pending"
     queue.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name != "nt":

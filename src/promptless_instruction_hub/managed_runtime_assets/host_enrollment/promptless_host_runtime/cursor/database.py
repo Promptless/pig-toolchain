@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from .contracts import JsonValue
-from .cursor_wire import MAX_BLOB, blob, fields, text_field, tool_result
+from ..contracts import JsonValue
+from .wire import MAX_BLOB, blob, fields, text_field, tool_result
 
 ADAPTER_VERSION = "cursor-desktop-3.19-v1"
 MAX_SESSION_BYTES = 32 * 1024 * 1024

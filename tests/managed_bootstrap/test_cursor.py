@@ -16,12 +16,15 @@ from collections.abc import Iterator
 import pytest
 
 from promptless_instruction_hub.compiler import build_hub, init_hub
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import cursor, cursor_db
 from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
     CollectionResult,
     HookTraceContext,
 )
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.cursor_wire import (
+from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.cursor import (
+    capture as cursor_capture,
+    database as cursor_database,
+)
+from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.cursor.wire import (
     fields,
     tool_result,
 )
@@ -56,8 +59,8 @@ def database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[sqlite
     """Use only a synthetic database and private collector spool."""
     path = tmp_path / "state.vscdb"
     monkeypatch.setenv("PROMPTLESS_CURSOR_DATABASE", str(path))
-    monkeypatch.setattr(cursor, "spool_root", lambda: tmp_path / "spool")
-    monkeypatch.setattr(cursor, "transcript_glob", lambda: str(tmp_path / "transcripts/*.jsonl"))
+    monkeypatch.setattr(cursor_capture, "spool_root", lambda: tmp_path / "spool")
+    monkeypatch.setattr(cursor_capture, "transcript_glob", lambda: str(tmp_path / "transcripts/*.jsonl"))
     connection = sqlite3.connect(path)
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)")
@@ -77,18 +80,18 @@ def put(connection: sqlite3.Connection, key: str, value: object) -> None:
 def test_oversized_fallback_data_is_capped_without_losing_origin(
     database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cursor, "MAX_RECORD", 1024)
+    monkeypatch.setattr(cursor_capture, "MAX_RECORD", 1024)
     observation = {
         "event_id": "transcript:0:0",
         "event": {"kind": "session_event", "name": "cursor_transcript_tool_call", "data": {"input": "x" * 4000}},
         "capture": {"source": "transcript", "completeness": "partial"},
     }
-    path = cursor.append_observations("session", [observation])
+    path = cursor_capture.append_observations("session", [observation])
     saved = json.loads(path.read_bytes())
     assert path.stat().st_size <= 1024
     assert saved["event"]["data"] == {}
     assert saved["capture"] == {"source": "transcript", "completeness": "size_limit"}
-    cursor.append_observations("session", [observation])
+    cursor_capture.append_observations("session", [observation])
     assert len(path.read_text().splitlines()) == 1
 
 
@@ -154,7 +157,7 @@ def test_canonical_reference_graph_and_read_only_wal(database: sqlite3.Connectio
     put(database, "agentKv:blob:" + b"step".hex(), wire(2, call(1, wire(5, "saved stdout"))))
     database.execute("BEGIN IMMEDIATE")
     database.execute("INSERT INTO cursorDiskKV VALUES ('uncommitted', 'value')")
-    page = cursor_db.read_session("session", deadline=time.monotonic() + 1)
+    page = cursor_database.read_session("session", deadline=time.monotonic() + 1)
     assert page.complete
     assert page.records[-1]["event"]["output"]["stdout"] == "saved stdout"
     assert "SECRET" not in json.dumps(page.records)
@@ -167,7 +170,7 @@ def test_exclusive_database_lock_returns_without_waiting(database: sqlite3.Conne
     database.execute("BEGIN EXCLUSIVE")
     started = time.monotonic()
     with pytest.raises(sqlite3.OperationalError):
-        cursor_db.read_session("session", deadline=started + 0.5)
+        cursor_database.read_session("session", deadline=started + 0.5)
     assert time.monotonic() - started < 0.1
     database.rollback()
 
@@ -175,18 +178,18 @@ def test_exclusive_database_lock_returns_without_waiting(database: sqlite3.Conne
 def test_rollback_journal_is_skipped_to_avoid_delaying_editor_writes(database: sqlite3.Connection) -> None:
     database.execute("PRAGMA journal_mode=DELETE")
     with pytest.raises(ValueError, match="cursor_database_requires_wal"):
-        cursor_db.read_session("session", deadline=time.monotonic() + 0.5)
+        cursor_database.read_session("session", deadline=time.monotonic() + 0.5)
     database.execute("BEGIN EXCLUSIVE")
     database.rollback()
 
 
 def test_missing_bubble_is_reported_and_retried(database: sqlite3.Connection) -> None:
     put(database, "composerData:session", {"fullConversationHeadersOnly": [{"bubbleId": "pending"}]})
-    page = cursor_db.read_session("session", deadline=time.monotonic() + 0.5)
+    page = cursor_database.read_session("session", deadline=time.monotonic() + 0.5)
     assert not page.complete
     assert page.records[0]["capture"]["completeness"] == "missing"
     put(database, "bubbleId:session:pending", {"type": 1, "text": "saved"})
-    assert cursor_db.read_session("session", deadline=time.monotonic() + 0.5).complete
+    assert cursor_database.read_session("session", deadline=time.monotonic() + 0.5).complete
 
 
 def test_pending_notification_survives_failed_upload(
@@ -199,12 +202,12 @@ def test_pending_notification_survives_failed_upload(
     monkeypatch.setattr(cli.time, "sleep", lambda _: None)
     monkeypatch.setattr(cli.os, "nice", lambda _: None, raising=False)
     cli._run_cursor_notify({"conversation_id": "session", "generation_id": "g", "secret": "never persist"}, "stop")
-    pending = list((cursor.spool_root() / "pending").glob("*.json"))
+    pending = list((cursor_capture.spool_root() / "pending").glob("*.json"))
     assert len(pending) == 1
     assert "never persist" not in pending[0].read_text()
     monkeypatch.setattr(cli, "_run_collect", lambda *args, **kwargs: CollectionResult.COMPLETE)
     cli._run_cursor_notify({"conversation_id": "session", "generation_id": "g"}, "stop")
-    assert not list((cursor.spool_root() / "pending").glob("*.json"))
+    assert not list((cursor_capture.spool_root() / "pending").glob("*.json"))
 
 
 def test_busy_collector_preserves_notification_until_next_wakeup(
@@ -218,14 +221,16 @@ def test_busy_collector_preserves_notification_until_next_wakeup(
         storage,
     )
 
-    root = cursor.spool_root()
+    root = cursor_capture.spool_root()
     root.mkdir()
     program = (
         "import json, sys, time\n"
         "from pathlib import Path\n"
         "from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime "
-        "import cli, cursor\n"
-        "cursor.spool_root = lambda: Path(sys.argv[1])\n"
+        "import cli\n"
+        "from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.cursor "
+        "import capture as cursor_capture\n"
+        "cursor_capture.spool_root = lambda: Path(sys.argv[1])\n"
         "def unexpected(*args, **kwargs):\n"
         "    raise AssertionError('A busy collector must not enroll or collect')\n"
         "cli._run_ensure = cli._run_collect = unexpected\n"
@@ -266,11 +271,11 @@ def test_busy_collector_preserves_notification_until_next_wakeup(
 
 def test_spool_limit_preserves_existing_journal(database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
     first = {"event_id": "a", "event": {"kind": "user_message", "text": "saved"}}
-    path = cursor.append_observations("session", [first])
+    path = cursor_capture.append_observations("session", [first])
     prefix = path.read_bytes()
-    monkeypatch.setattr(cursor, "MAX_SPOOL", len(prefix))
+    monkeypatch.setattr(cursor_capture, "MAX_SPOOL", len(prefix))
     with pytest.raises(ValueError, match="cursor_spool_size_limit"):
-        cursor.append_observations("session", [{**first, "event_id": "b"}])
+        cursor_capture.append_observations("session", [{**first, "event_id": "b"}])
     assert path.read_bytes() == prefix
 
 
@@ -280,9 +285,9 @@ def test_journal_revisions_preserve_acknowledged_bytes_and_native_identity(datab
         "event": {"kind": "tool_result", "tool": "shell", "call_id": "call", "output": None},
         "capture": {"source": "database", "completeness": "missing"},
     }
-    path = cursor.append_observations("session", [first])
+    path = cursor_capture.append_observations("session", [first])
     prefix = path.read_bytes()
-    cursor.append_observations("session", [first])
+    cursor_capture.append_observations("session", [first])
     assert path.read_bytes() == prefix
     with path.open("ab") as handle:
         handle.write(b'{"torn')
@@ -291,19 +296,19 @@ def test_journal_revisions_preserve_acknowledged_bytes_and_native_identity(datab
         "event": {**first["event"], "output": "saved"},
         "capture": {"source": "database", "completeness": "available"},
     }
-    cursor.append_observations("session", [second])
+    cursor_capture.append_observations("session", [second])
     assert path.read_bytes().startswith(prefix)
     records = [json.loads(line) for line in path.read_text().splitlines()]
     assert [row["revision"] for row in records] == [1, 2]
-    cursor.append_observations("session", [first])
+    cursor_capture.append_observations("session", [first])
     assert len(path.read_text().splitlines()) == 2
     with pytest.raises(ValueError):
-        cursor.append_observations("../escape", [first])
+        cursor_capture.append_observations("../escape", [first])
 
 
 def test_fallback_to_database_amends_matching_messages(database: sqlite3.Connection) -> None:
     message = {"kind": "user_message", "text": "same prompt"}
-    path = cursor.append_observations(
+    path = cursor_capture.append_observations(
         "session",
         [
             {
@@ -318,7 +323,7 @@ def test_fallback_to_database_amends_matching_messages(database: sqlite3.Connect
         "event": message,
         "capture": {"source": "database", "completeness": "available"},
     }
-    cursor.append_observations("session", [native, native])
+    cursor_capture.append_observations("session", [native, native])
     rows = [json.loads(line) for line in path.read_text().splitlines()]
     assert [row["revision"] for row in rows] == [1, 2]
     assert {row["event_id"] for row in rows} == {"transcript:0:0"}
@@ -327,7 +332,7 @@ def test_fallback_to_database_amends_matching_messages(database: sqlite3.Connect
 def test_pages_resume_before_terminal_and_child_hook_never_closes_parent(
     database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cursor_db, "PAGE_SIZE", 1)
+    monkeypatch.setattr(cursor_database, "PAGE_SIZE", 1)
     put(database, "composerData:child", {"fullConversationHeadersOnly": [{"bubbleId": "a"}, {"bubbleId": "b"}]})
     for identity in ("a", "b"):
         put(database, "bubbleId:child:" + identity, {"type": 1, "text": identity})
@@ -340,11 +345,11 @@ def test_pages_resume_before_terminal_and_child_hook_never_closes_parent(
         parent_session_id=None,
         agent_type=None,
     )
-    first = cursor.prepare_journals(context, "subagent_stop")
+    first = cursor_capture.prepare_journals(context, "subagent_stop")
     assert not first.complete
     assert first.context.transcript_path is not None
     assert "subagent_stop" not in first.context.transcript_path.read_text()
-    second = cursor.prepare_journals(context, "subagent_stop")
+    second = cursor_capture.prepare_journals(context, "subagent_stop")
     assert second.complete
     assert second.context.transcript_path is not None
     rows = [json.loads(line) for line in second.context.transcript_path.read_text().splitlines()]
@@ -406,9 +411,9 @@ def test_unsaved_session_remains_pending(database: sqlite3.Connection) -> None:
         agent_id=None,
         agent_type=None,
     )
-    exported = cursor.prepare_journals(context, "session_end")
+    exported = cursor_capture.prepare_journals(context, "session_end")
     assert not exported.complete
-    assert not list((cursor.spool_root() / "journals").glob("*.jsonl"))
+    assert not list((cursor_capture.spool_root() / "journals").glob("*.jsonl"))
 
 
 def test_cursor_collect_uploads_only_acknowledged_journal_ranges(tmp_path: Path) -> None:
@@ -475,13 +480,13 @@ def test_journal_retains_complete_result_after_pruned_ui_fallback(database: sqli
             }
         },
     )
-    page = cursor_db.read_session("session", deadline=time.monotonic() + 1)
-    path = cursor.append_observations("session", page.records)
+    page = cursor_database.read_session("session", deadline=time.monotonic() + 1)
+    path = cursor_capture.append_observations("session", page.records)
     before = path.read_bytes()
     put(database, "bubbleId:session:tool", {"toolFormerData": {**tool, "result": "truncated UI result"}})
-    page = cursor_db.read_session("session", deadline=time.monotonic() + 1)
+    page = cursor_database.read_session("session", deadline=time.monotonic() + 1)
     assert page.records[-1]["capture"]["completeness"] == "partial"
-    cursor.append_observations("session", page.records)
+    cursor_capture.append_observations("session", page.records)
     assert path.read_bytes() == before
 
 
@@ -500,7 +505,7 @@ def test_detached_launcher_records_collector_outcome(tmp_path: Path, program: st
         pytest.skip("Node is required for Cursor hooks")
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    source = Path(cursor.__file__).parents[1] / "cursor-hook.cjs"
+    source = Path(cursor_capture.__file__).parents[2] / "cursor-hook.cjs"
     hook = runtime / source.name
     shutil.copyfile(source, hook)
     (runtime / "promptless-host-runtime").write_text(program)

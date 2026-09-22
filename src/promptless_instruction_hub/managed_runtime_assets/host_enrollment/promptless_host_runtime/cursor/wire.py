@@ -10,7 +10,7 @@ import math
 import struct
 from typing import Union
 
-from .contracts import JsonValue
+from ..contracts import JsonValue
 
 WireValue = Union[bytes, int]
 MAX_BLOB = 8 * 1024 * 1024
