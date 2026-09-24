@@ -196,6 +196,7 @@ def test_gitlab_nested_publish_freshness_scopes_source_paths(tmp_path: Path, cha
 def test_gitlab_change_filters_follow_rendered_hub_root(hub_root: str) -> None:
     spec, template = yaml.safe_load_all(_render_template({"hub-root": hub_root}))
     assert spec["spec"]["inputs"]["hub-root"]["default"] == "."
+    assert template[".instruction-hub"]["variables"]["INSTRUCTION_HUB_ROOT"] == hub_root
     root_paths = [".gitlab-ci.yml", ".gitignore", "hub.yaml", "hub.repo-context.json", "assets/**/*", "plugins/**/*"]
     nested_paths = [".gitlab-ci.yml", ".gitignore"] + [
         f"{hub_root}/{path}"
@@ -206,8 +207,8 @@ def test_gitlab_change_filters_follow_rendered_hub_root(hub_root: str) -> None:
         ("publish", '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'),
     ):
         rules = template[f"instruction-hub-{job}"]["rules"]
-        assert rules[0] == {"if": f'{condition} && "{hub_root}" == "."', "changes": root_paths}
-        assert rules[1] == {"if": f'{condition} && "{hub_root}" != "."', "changes": nested_paths}
+        assert rules[0] == {"if": f'{condition} && $INSTRUCTION_HUB_ROOT == "."', "changes": root_paths}
+        assert rules[1] == {"if": f'{condition} && $INSTRUCTION_HUB_ROOT != "."', "changes": nested_paths}
         active_paths = rules[0 if hub_root == "." else 1]["changes"]
         assert not any(path.startswith("./") or "//" in path for path in active_paths)
 

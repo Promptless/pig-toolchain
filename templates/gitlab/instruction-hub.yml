@@ -22,6 +22,7 @@ spec:
   image: python:3.13-bookworm
   variables:
     GIT_DEPTH: "0"
+    INSTRUCTION_HUB_ROOT: $[[ inputs.hub-root ]]
     INSTRUCTION_HUB_TOOLCHAIN_REF: $[[ inputs.toolchain-ref ]]
     INSTRUCTION_HUB_RELEASE_BRANCH: $[[ inputs.release-branch ]]
     UV_VERSION: "0.8.14"
@@ -57,7 +58,7 @@ instruction-hub-check:
       INPUT_HUB_ROOT="$INSTRUCTION_HUB_ROOT" \
         "$INSTRUCTION_HUB_TOOLCHAIN_DIR/scripts/run.sh"
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && "$[[ inputs.hub-root ]]" == "."'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $INSTRUCTION_HUB_ROOT == "."'
       changes: &root-hub-source
         - .gitlab-ci.yml
         - .gitignore
@@ -65,7 +66,7 @@ instruction-hub-check:
         - hub.repo-context.json
         - assets/**/*
         - plugins/**/*
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && "$[[ inputs.hub-root ]]" != "."'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $INSTRUCTION_HUB_ROOT != "."'
       changes: &nested-hub-source
         - .gitlab-ci.yml
         - .gitignore
@@ -123,8 +124,8 @@ instruction-hub-publish:
       INPUT_COMMIT_USER_EMAIL="gitlab-ci@$CI_SERVER_HOST" \
         "$INSTRUCTION_HUB_TOOLCHAIN_DIR/scripts/run.sh"
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && "$[[ inputs.hub-root ]]" == "."'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $INSTRUCTION_HUB_ROOT == "."'
       changes: *root-hub-source
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && "$[[ inputs.hub-root ]]" != "."'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $INSTRUCTION_HUB_ROOT != "."'
       changes: *nested-hub-source
     - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
