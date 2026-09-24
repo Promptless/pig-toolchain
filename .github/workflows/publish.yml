@@ -2,6 +2,10 @@ name: Publish Instruction Hub
 
 on:
   workflow_call:
+    secrets:
+      toolchain-token:
+        description: Optional token with read access to a private toolchain repository. Defaults to github.token.
+        required: false
     inputs:
       hub-root:
         description: Path to the Instruction Hub root.
@@ -33,31 +37,55 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Resolve toolchain ref
+      - name: Resolve toolchain source
         id: toolchain-ref
         shell: bash
         env:
-          EXPECTED_WORKFLOW_PREFIX: Promptless/pig-toolchain/.github/workflows/publish.yml@
+          EXPECTED_WORKFLOW_PATH: .github/workflows/publish.yml
           JOB_WORKFLOW_REF: ${{ job.workflow_ref }}
         run: |
           set -euo pipefail
 
-          if [[ "$JOB_WORKFLOW_REF" != "$EXPECTED_WORKFLOW_PREFIX"* ]]; then
-            echo "Unexpected reusable workflow ref: $JOB_WORKFLOW_REF" >&2
+          if [[ -z "$JOB_WORKFLOW_REF" ]]; then
+            echo "job.workflow_ref is unavailable; this reusable workflow requires GitHub.com workflow identity support." >&2
+            exit 2
+          fi
+          if [[ "$JOB_WORKFLOW_REF" == *[[:cntrl:]]* ]]; then
+            echo "Invalid reusable workflow identity: control characters are not allowed." >&2
             exit 2
           fi
 
-          toolchain_ref="${JOB_WORKFLOW_REF#"$EXPECTED_WORKFLOW_PREFIX"}"
-          if [[ -z "$toolchain_ref" ]]; then
-            echo "Unable to resolve toolchain ref from job.workflow_ref." >&2
+          workflow_path="${JOB_WORKFLOW_REF%%@*}"
+          toolchain_repository="${workflow_path%/"$EXPECTED_WORKFLOW_PATH"}"
+          if [[ "$workflow_path" != "$toolchain_repository/$EXPECTED_WORKFLOW_PATH" ]] ||
+             [[ ! "$toolchain_repository" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*/[A-Za-z0-9_.-]+$ ]] ||
+             [[ "${toolchain_repository#*/}" == . || "${toolchain_repository#*/}" == .. ]]; then
+            echo "Invalid reusable workflow identity: expected owner/repository/$EXPECTED_WORKFLOW_PATH@ref." >&2
             exit 2
           fi
 
-          printf 'ref=%s\n' "$toolchain_ref" >> "$GITHUB_OUTPUT"
+          toolchain_ref="${JOB_WORKFLOW_REF#*@}"
+          if [[ ! "$toolchain_ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            case "$toolchain_ref" in
+              refs/heads/*|refs/tags/*|refs/pull/*)
+                if ! git check-ref-format "$toolchain_ref"; then
+                  echo "Invalid reusable workflow Git ref." >&2
+                  exit 2
+                fi
+                ;;
+              *)
+                echo "Invalid reusable workflow ref: expected a full branch/tag/pull ref or commit SHA." >&2
+                exit 2
+                ;;
+            esac
+          fi
+
+          printf 'repository=%s\nref=%s\n' "$toolchain_repository" "$toolchain_ref" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: Promptless/pig-toolchain
+          repository: ${{ steps.toolchain-ref.outputs.repository }}
           ref: ${{ steps.toolchain-ref.outputs.ref }}
+          token: ${{ secrets.toolchain-token || github.token }}
           path: .promptless-pig-toolchain
           persist-credentials: false
       - uses: ./.promptless-pig-toolchain
