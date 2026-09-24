@@ -21,6 +21,7 @@ from .contracts import (
     RuntimeMetadata,
     WorkerResponseError,
 )
+from .native_bundle import build_runtime_opener
 from .redaction import _redact_json
 from .validation import _datetime_value, _decode_json_object, _int_value, _string_value
 
@@ -73,6 +74,7 @@ def _post_json_response(
     payload: dict[str, JsonValue],
     *,
     label: str,
+    allow_redirects: bool = True,
 ) -> dict[str, JsonValue]:
     body = json.dumps(payload, sort_keys=True).encode()
     request = urllib.request.Request(
@@ -82,8 +84,12 @@ def _post_json_response(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-            return _decode_json_object(response.read(), label)
+        open_request = urllib.request.urlopen if allow_redirects else build_runtime_opener(_NoRedirect()).open
+        with open_request(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            body = response.read() if allow_redirects else response.read(64 * 1024 + 1)
+            if not allow_redirects and len(body) > 64 * 1024:
+                raise BootstrapError(f"{label} exceeded 64 KiB")
+            return _decode_json_object(body, label)
     except urllib.error.HTTPError as exc:
         if exc.code in {401, 403}:
             raise BootstrapAuthError(f"{label} request failed with HTTP {exc.code}") from exc
@@ -94,6 +100,15 @@ def _post_json_response(
         if isinstance(exc.reason, (TimeoutError, socket.timeout)):
             raise _worker_timeout_error(label) from exc
         raise
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Keep device enrollment proofs on the configured API endpoint."""
+
+    def redirect_request(
+        self, req: object, fp: object, code: object, msg: object, headers: object, newurl: object
+    ) -> None:
+        return None
 
 
 def _worker_timeout_error(label: str) -> BootstrapError:

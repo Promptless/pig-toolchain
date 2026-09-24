@@ -34,6 +34,7 @@ from .contracts import (
     _enrollment_host,
 )
 from .cursor import capture as cursor_capture
+from .device_enrollment import _obtain_device_host_credential
 from .enrollment import (
     _credential_with_policy_identity,
     _enroll_host_credential,
@@ -144,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "status":
         return _run_status_command(host)
     if args.command == "enroll":
-        return _run_enroll_command(host)
+        return _run_enroll_command(host, device=args.device)
     if args.command == "reset":
         return _run_reset_command(host)
     parser.error(f"unknown command: {args.command}")
@@ -221,6 +222,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
     enroll_parser = subcommands.add_parser("enroll", help="Enroll the host credential without editing host config")
     _add_host_argument(enroll_parser)
+    enroll_parser.add_argument(
+        "--device", action="store_true", help="Print an approval link for enrollment from another device"
+    )
 
     reset_parser = subcommands.add_parser("reset", help="Clear cached host credentials and pending enrollment state")
     _add_host_argument(reset_parser)
@@ -669,7 +673,7 @@ def _run_status_command(host: Host) -> int:
     return 0
 
 
-def _run_enroll_command(host: Host) -> int:
+def _run_enroll_command(host: Host, *, device: bool = False) -> int:
     try:
         plugin_root = _plugin_root()
         enrollment_target = _enrollment_host(host)
@@ -677,7 +681,9 @@ def _run_enroll_command(host: Host) -> int:
         worker_base_url = _worker_base_url()
         dashboard_base_url = _dashboard_base_url()
         context = _enrollment_context(worker_base_url, dashboard_base_url, metadata)
-        enrollment_attempt = _obtain_host_credential(context, quiet=True)
+        enrollment_attempt = (
+            _obtain_device_host_credential(context) if device else _obtain_host_credential(context, quiet=True)
+        )
         if enrollment_attempt.credential is None:
             _emit_command_json(
                 {

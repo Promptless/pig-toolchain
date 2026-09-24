@@ -97,7 +97,7 @@ def init_hub(
         version=version,
         trace_ingestion=TraceIngestionConfig(enabled=False),
     )
-    _write_file_if_missing(root / CONFIG_PATH, config.model_dump())
+    _write_file_if_missing(root / CONFIG_PATH, config.model_dump(exclude_none=True))
     _write_file_if_missing(
         root / PLUGIN_DIR / f"{PIG_PLUGIN_ID}.yaml",
         {"id": PIG_PLUGIN_ID, "name": PIG_PLUGIN_NAME, "owners": [], "includes": []},

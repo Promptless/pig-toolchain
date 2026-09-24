@@ -689,6 +689,27 @@ worker. Gemini does not receive that managed runtime. See the
 [Cursor collection guide](docs/cursor-trace-ingestion.md) for prerequisites,
 capture limits, and desktop qualification.
 
+For a customer worker or dashboard, configure the public HTTPS origins in the hub:
+
+```yaml
+trace_ingestion:
+  enabled: true
+  worker_base_url: https://pig.example.com
+  dashboard_base_url: https://dashboard.example.com
+  hosted_api_base_url: https://api.example.com
+```
+
+These fields are optional and default to the Promptless production endpoints.
+They accept origins only: no credentials, path, query, or fragment. The toolchain
+packages these settings in `hub.runtime-config.json` with each managed runtime,
+so installed plugins use the hub's destinations without machine-level setup.
+`PROMPTLESS_WORKER_BASE_URL`, `PROMPTLESS_DASHBOARD_BASE_URL`, and
+`PROMPTLESS_HOSTED_API_BASE_URL` override their
+respective packaged values when needed. Invalid packaged configuration fails
+with a diagnostic instead of silently selecting another destination. These
+settings contain public addresses; enrollment still requires user approval and
+stores credentials locally, outside the published plugin.
+
 After changing this setting, publish the hub and refresh its installed plugins.
 Disabling it removes managed hooks from the new release; an older installed
 plugin keeps its hooks until refreshed. It does not delete previously ingested
@@ -803,8 +824,8 @@ certificate and hostname validation enabled; explicit `SSL_CERT_FILE` or
 `SSL_CERT_DIR` settings retain control of custom trust roots. Without those
 overrides, bundled public roots supplement the default system/OpenSSL trust.
 
-The host runtime uses `PROMPTLESS_WORKER_BASE_URL` or the default
-production worker. It reads the worker's public `/healthz` identity, opens the
+The host runtime uses the worker and dashboard selected above. It reads the
+worker's public `/healthz` identity, opens the
 hosted Promptless dashboard start URL, and listens on a loopback callback with a
 per-attempt state token for the approved session proof. It then polls the hosted
 runtime for a one-time per-host credential, caches that credential, and uses the
@@ -944,6 +965,40 @@ browser, config writes, or check-ins. `reset --yes` clears cached host
 credentials and pending enrollments while preserving the stable host id,
 last-seen plugin versions, and one internal welcome marker per installed
 marketplace version. `version` reports runtime metadata.
+
+For an SSH session, remote workstation, or other headless machine, run the
+installed runtime directly:
+
+```sh
+/path/to/pig/runtime/promptless-host-runtime enroll --host codex --device
+```
+
+Use `claude` or `cursor` for those hosts. The command prints an approval link to
+stderr that you can open on another device, then polls for about 35 seconds.
+It needs no local browser, inbound port, or loopback callback. If its JSON result
+is `setup_pending`, approve the link and run the same command again; it resumes
+the saved session until the 15-minute approval expires. After expiry, the next
+run creates a new approval. Concurrent enrollment commands share one session.
+Credentials stay in the local host state and are never printed. `enroll` only
+obtains the credential; the next `ensure` or lifecycle hook reconciles the host.
+
+Device enrollment requires the hosted API's
+`POST /v1/instruction-hub/host-enrollments/device-sessions` endpoint. Custom
+installations must configure `hosted_api_base_url` as well as their worker and
+dashboard origins. Approval still requires membership in the deployment's
+organization. Disabling automatic browser launch alone does not enable this flow.
+
+Before the customer-grade release, replace the dogfood Python implementation
+with a static native binary built and versioned by Promptless, then bundled into
+the toolchain release. Customer Instruction Hub repositories should not need
+Python, Node, uv, Go, Rust, curl, jq, or other runtime/build dependencies installed
+for the hook to run. Customer builds should only consume the already-built
+Promptless artifact bundle that the toolchain copies into plugin `runtime/`.
+
+The dogfood runtime trusts the authenticated TLS worker response and validates
+only the hosted policy shape. The customer-grade static binary must verify an
+asymmetric hosted-policy signature with a pinned Promptless public key before it
+edits local host config.
 
 Hosted policy verification is unchanged: the runtime trusts the authenticated
 TLS worker response and validates the policy shape. Native packaging does not
