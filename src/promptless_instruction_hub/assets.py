@@ -28,7 +28,7 @@ from promptless_instruction_hub.models import (
 
 ASSETS_DIR = Path("assets")
 METADATA_FILE = "asset.yaml"
-SECRET_KEY_WORDS = {"token", "tokens", "secret", "secrets", "password", "passwords", "apikey"}
+SECRET_KEY_WORDS = {"token", "tokens", "secret", "secrets", "password", "passwords", "apikey", "apikeys"}
 SECRET_KEY_NAMES = {"authorization", "cookie", "pgpassword", "proxy_authorization", "x_api_key"}
 ENV_REFERENCE = re.compile(
     r"(?:\$\{(?:[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_-]*)\}|env:[A-Za-z_][A-Za-z0-9_]*)"
@@ -335,7 +335,7 @@ def _requires_env_placeholder(field: str) -> bool:
     return (
         field in SECRET_KEY_NAMES
         or bool(SECRET_KEY_WORDS.intersection(words))
-        or re.search(r"(?:^|_)(?:api|private)_key(?:_|$)", field) is not None
+        or re.search(r"(?:^|_)(?:api|private)_keys?(?:_|$)", field) is not None
     )
 
 

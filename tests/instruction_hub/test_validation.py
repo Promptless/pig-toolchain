@@ -321,7 +321,9 @@ def test_validate_accepts_mcp_authorization_env_references(tmp_path: Path, heade
     validate_hub(hub_root)
 
 
-@pytest.mark.parametrize("server_name", ["tokenizer", "secretary", "token-service"])
+@pytest.mark.parametrize(
+    "server_name", ["tokenizer", "secretary", "token-service", "api_keys", "private_keys", "apikeys"]
+)
 def test_validate_does_not_treat_mcp_server_names_as_credentials(tmp_path: Path, server_name: str) -> None:
     hub_root = tmp_path / "hub"
     init_hub(hub_root, org="Acme")
@@ -404,6 +406,29 @@ def test_validate_still_rejects_wrapped_literal_credentials(tmp_path: Path, payl
     (skill_root / "config.json").write_text(json.dumps(payload))
 
     with pytest.raises(InstructionHubError, match="literal secret"):
+        validate_hub(hub_root)
+
+
+@pytest.mark.parametrize("field", ["api_keys", "private_keys", "apikeys", "apiKeys", "privateKeys", "API_KEYS"])
+@pytest.mark.parametrize("shape", ["list", "value", "default", "wrapped-items"])
+@pytest.mark.parametrize("credential", ["literal-secret", "${MCP_SECRET}", "${env:MCP_SECRET}"])
+def test_validate_checks_plural_credential_collections(tmp_path: Path, field: str, shape: str, credential: str) -> None:
+    hub_root = tmp_path / "hub"
+    init_hub(hub_root, org="Acme")
+    skill_root = hub_root / "assets/skills/example"
+    skill_root.mkdir()
+    (skill_root / "SKILL.md").write_text("# Example\n")
+    value: object = [[credential]]
+    if shape in {"value", "default"}:
+        value = {shape: value}
+    elif shape == "wrapped-items":
+        value = [{"value": [credential]}, {"default": [credential]}]
+    (skill_root / "config.json").write_text(json.dumps({field: value}))
+
+    if credential == "literal-secret":
+        with pytest.raises(InstructionHubError, match="literal secret"):
+            validate_hub(hub_root)
+    else:
         validate_hub(hub_root)
 
 
