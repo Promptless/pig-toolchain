@@ -53,7 +53,7 @@ def _configure_endpoints(hub: Path, **endpoints: JsonValue) -> None:
 def test_hub_rejects_invalid_packaged_origin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: JsonValue
 ) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Acme")
     _configure_endpoints(tmp_path, **{field: value})
     # The runtime's loopback test escape hatch must not loosen authored hub configuration.
     monkeypatch.setenv("PROMPTLESS_HOST_ENROLLMENT_ALLOW_TEST_URL_OVERRIDES", "1")
@@ -65,7 +65,7 @@ def test_hub_rejects_invalid_packaged_origin(
 
 @pytest.mark.parametrize("origin", ["https://worker.example", "https://worker.example:8443", "https://[::1]:8443"])
 def test_hub_accepts_and_normalizes_https_origins(tmp_path: Path, origin: str) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Acme")
     _configure_endpoints(tmp_path, worker_base_url=origin + "/", dashboard_base_url=origin)
     ingestion = load_hub_config(tmp_path).trace_ingestion
     assert ingestion.worker_base_url == ingestion.dashboard_base_url == origin
@@ -89,7 +89,7 @@ def test_hub_accepts_and_normalizes_https_origins(tmp_path: Path, origin: str) -
 def test_build_packages_only_public_config_for_supported_runtimes(
     tmp_path: Path, endpoints: dict[str, JsonValue], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Acme")
     _configure_endpoints(tmp_path, **endpoints)
     monkeypatch.setenv("PROMPTLESS_WORKER_BASE_URL", "https://do-not-package.example")
     monkeypatch.setenv("PROMPTLESS_DASHBOARD_BASE_URL", "https://also-do-not-package.example")
@@ -113,7 +113,7 @@ def test_build_packages_only_public_config_for_supported_runtimes(
 @pytest.mark.parametrize("field", ["worker_base_url", "dashboard_base_url", "hosted_api_base_url"])
 def test_endpoint_change_changes_compiled_hash_and_publish_version(tmp_path: Path, field: str) -> None:
     hub = tmp_path / "hub"
-    init_hub(hub)
+    init_hub(hub, org="Acme")
     _configure_endpoints(hub, **{field: "https://old.customer.example"})
     before = build_hub(hub)
     previous = tmp_path / "previous"
@@ -130,16 +130,16 @@ def test_endpoint_change_changes_compiled_hash_and_publish_version(tmp_path: Pat
 
 
 def test_init_omits_unset_origins_and_preserves_existing_endpoints(tmp_path: Path) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Acme")
     assert read_yaml_mapping(tmp_path / "hub.yaml")["trace_ingestion"] == {"enabled": False}
     _configure_endpoints(tmp_path, worker_base_url="https://worker.customer.example")
     before = (tmp_path / "hub.yaml").read_bytes()
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Acme")
     assert (tmp_path / "hub.yaml").read_bytes() == before
 
 
 def test_disabling_ingestion_removes_packaged_endpoints(tmp_path: Path) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Acme")
     _configure_endpoints(tmp_path, worker_base_url="https://worker.customer.example")
     build_hub(tmp_path)
     config = read_yaml_mapping(tmp_path / "hub.yaml")
