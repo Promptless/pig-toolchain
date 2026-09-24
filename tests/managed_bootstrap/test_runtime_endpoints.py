@@ -16,7 +16,7 @@ from .helpers import HOST_RUNTIME_BIN, _FakeWorkerHandler, _FakeWorkerServer, _c
 
 
 def _build_plugin(hub: Path, *, worker: str | None = None, dashboard: str | None = None, host: str = "codex") -> Path:
-    init_hub(hub)
+    init_hub(hub, org="Acme")
     config = read_yaml_mapping(hub / "hub.yaml")
     config["trace_ingestion"] = {"enabled": True, "worker_base_url": worker, "dashboard_base_url": dashboard}
     write_yaml(hub / "hub.yaml", config)
