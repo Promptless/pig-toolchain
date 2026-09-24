@@ -775,6 +775,11 @@ are gated by the `enabled_hosts` policy. Codex idle discovery scans only
 `CODEX_HOME/archived_sessions/**/*.jsonl`. Hook-provided current transcript
 paths remain eligible outside those roots.
 
+Claude Code idle discovery scans `CLAUDE_CONFIG_DIR/projects/**/*.jsonl`, using
+the same configuration root as its `settings.json`. An unset or empty
+`CLAUDE_CONFIG_DIR` defaults to `~/.claude`; `~` in an override is expanded.
+Claude Desktop uses its separate application data directories.
+
 Claude and Codex SessionStart hooks launch one quiet `ensure`-then-collection supervisor. They
 include active files so pre-existing history is uploaded from byte zero when a
 source has no acknowledged offset. Terminal lifecycle hooks (`Stop`,
