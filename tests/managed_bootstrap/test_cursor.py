@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from collections.abc import Iterator
 
@@ -233,7 +234,7 @@ def test_transient_result_reads_preserve_retry_and_defer_terminal_event(
     assert b"keep this message" in before
     assert b"session_end" not in before
     state = json.loads((cursor_capture.spool_root() / "scan-state.json").read_text())
-    assert state["offsets"]["session"] == 1
+    assert state["traversals"]["session"]["offsets"]["session"] == 1
     exported = cursor_capture.prepare_journals(context, "session_end")
     assert exported.complete
     assert exported.context.transcript_path is not None
@@ -856,7 +857,7 @@ def test_failed_child_journal_does_not_lose_parent_page_progress(
     assert "child" in (journals / "child.jsonl").read_text()
 
 
-def test_discovered_child_shares_page_progress_with_required_traversal(
+def test_discovered_child_does_not_block_required_traversal(
     database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(cursor_database, "PAGE_SIZE", 1)
@@ -884,6 +885,31 @@ def test_discovered_child_shares_page_progress_with_required_traversal(
         json.loads(line) for line in (cursor_capture.spool_root() / "journals/child.jsonl").read_text().splitlines()
     ]
     assert [row["event"]["text"] for row in rows] == ["0", "1", "2", "3"]
+
+
+def test_overlapping_notifications_advance_independently(
+    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cursor_database, "PAGE_SIZE", 1)
+    put(database, "composerData:parent", {"fullConversationHeadersOnly": [], "subagentComposerIds": ["child"]})
+    put(database, "composerData:child", {"fullConversationHeadersOnly": [{"bubbleId": str(i)} for i in range(4)]})
+    for index in range(4):
+        put(database, f"bubbleId:child:{index}", {"type": 1, "text": str(index)})
+    parent = HookTraceContext(
+        session_id="parent",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    child = replace(parent, session_id="child")
+    for _ in range(6):
+        exported = cursor_capture.prepare_journals(parent, "session_end")
+        cursor_capture.prepare_journals(child, "session_end")
+        if exported.complete:
+            break
+    assert exported.complete
 
 
 def test_cursor_collect_uploads_only_acknowledged_journal_ranges(tmp_path: Path) -> None:

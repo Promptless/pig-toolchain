@@ -232,8 +232,6 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
         subject = None
     state_path = spool_root() / "scan-state.json"
     state = mapping(json.loads(state_path.read_text())) if state_path.exists() else {}
-    offsets = mapping(state.get("offsets"))
-    retry_offsets = mapping(state.get("retry_offsets"))
     traversals = mapping(state.get("traversals"))
     database_revision = _database_revision()
     after = string(state.get("after")) or ""
@@ -254,8 +252,12 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
     pending: list[tuple[str, Path | None, str]] = [(subject, subject_path, subject)] if subject else []
     scheduled = {(subject, subject)} if subject else set()
     completed: dict[str, set[str]] = {}
+    offsets: dict[str, dict[str, JsonValue]] = {}
+    retry_offsets: dict[str, dict[str, JsonValue]] = {}
     for owner in owners:
         traversal = mapping(traversals.get(owner))
+        offsets[owner] = mapping(traversal.get("offsets"))
+        retry_offsets[owner] = mapping(traversal.get("retry_offsets"))
         saved_pending = traversal.get("pending")
         resumed = [key for key in saved_pending if isinstance(key, str)] if isinstance(saved_pending, list) else []
         saved_completed = (
@@ -271,7 +273,6 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
                 pending.append((key, discovered.get(key), owner))
                 scheduled.add((key, owner))
     seen: set[tuple[str, str]] = set()
-    observed: dict[str, tuple[list[str], bool]] = {}
     retry: list[tuple[str, str]] = []
     deadline = time.monotonic() + 5
     current: Path | None = None
@@ -281,64 +282,60 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
         if (session_id, owner) in seen or not SESSION_PATTERN.fullmatch(session_id):
             continue
         seen.add((session_id, owner))
-        if session_id in observed:
-            children, page_complete = observed[session_id]
-        else:
-            children: list[str] = []
-            page_complete = False
+        children: list[str] = []
+        page_complete = False
+        try:
+            offset = offsets[owner].get(session_id, 0)
+            retry_offset = retry_offsets[owner].get(session_id)
+            page = read_session(
+                session_id,
+                deadline=min(deadline, time.monotonic() + 0.5),
+                offset=offset if isinstance(offset, int) else 0,
+                retry_offset=retry_offset if isinstance(retry_offset, int) else None,
+            )
+            observations = page.records
+            children = page.children
+            next_offset = page.next_offset
+            page_complete = page.complete
+        except (sqlite3.Error, OSError, ValueError) as exc:
+            reason = "database_busy" if isinstance(exc, sqlite3.OperationalError) else "decode_or_budget"
+            errors[reason] = errors.get(reason, 0) + 1
+            observations = []
+            next_offset = None
+        if not observations:
             try:
-                offset = offsets.get(session_id, 0)
-                retry_offset = retry_offsets.get(session_id)
-                page = read_session(
-                    session_id,
-                    deadline=min(deadline, time.monotonic() + 0.5),
-                    offset=offset if isinstance(offset, int) else 0,
-                    retry_offset=retry_offset if isinstance(retry_offset, int) else None,
-                )
-                observations = page.records
-                children = page.children
-                next_offset = page.next_offset
-                page_complete = page.complete
-            except (sqlite3.Error, OSError, ValueError) as exc:
-                reason = "database_busy" if isinstance(exc, sqlite3.OperationalError) else "decode_or_budget"
-                errors[reason] = errors.get(reason, 0) + 1
-                observations = []
+                observations = _fallback(transcript)
+            except (OSError, ValueError):
+                errors["transcript_unreadable"] = errors.get("transcript_unreadable", 0) + 1
+        if session_id == subject and owner == subject and lifecycle and next_offset == 0 and page_complete:
+            observations.append(
+                {
+                    "event_id": f"lifecycle:{context.generation_id or 'unknown'}:{lifecycle}",
+                    "generation_id": context.generation_id,
+                    "parent_session_id": context.session_id
+                    if lifecycle == "subagent_stop"
+                    else context.parent_session_id,
+                    "agent_id": subject if lifecycle == "subagent_stop" else context.agent_id,
+                    "event": {"kind": "session_event", "name": lifecycle, "data": {}},
+                    "capture": {"source": "hook", "completeness": "available"},
+                }
+            )
+        if observations:
+            try:
+                path = append_observations(session_id, observations)
+            except (OSError, ValueError):
+                errors["journal_write"] = errors.get("journal_write", 0) + 1
                 next_offset = None
-            if not observations:
-                try:
-                    observations = _fallback(transcript)
-                except (OSError, ValueError):
-                    errors["transcript_unreadable"] = errors.get("transcript_unreadable", 0) + 1
-            if session_id == subject and owner == subject and lifecycle and next_offset == 0 and page_complete:
-                observations.append(
-                    {
-                        "event_id": f"lifecycle:{context.generation_id or 'unknown'}:{lifecycle}",
-                        "generation_id": context.generation_id,
-                        "parent_session_id": context.session_id
-                        if lifecycle == "subagent_stop"
-                        else context.parent_session_id,
-                        "agent_id": subject if lifecycle == "subagent_stop" else context.agent_id,
-                        "event": {"kind": "session_event", "name": lifecycle, "data": {}},
-                        "capture": {"source": "hook", "completeness": "available"},
-                    }
-                )
-            if observations:
-                try:
-                    path = append_observations(session_id, observations)
-                except (OSError, ValueError):
-                    errors["journal_write"] = errors.get("journal_write", 0) + 1
-                    next_offset = None
-                    page_complete = False
-                else:
-                    if session_id == subject and owner == subject:
-                        current = path
-            if next_offset is not None:
-                offsets[session_id] = next_offset
-                if page.retry_offset is None:
-                    retry_offsets.pop(session_id, None)
-                else:
-                    retry_offsets[session_id] = page.retry_offset
-            observed[session_id] = (children, page_complete)
+                page_complete = False
+            else:
+                if session_id == subject and owner == subject:
+                    current = path
+        if next_offset is not None:
+            offsets[owner][session_id] = next_offset
+            if page.retry_offset is None:
+                retry_offsets[owner].pop(session_id, None)
+            else:
+                retry_offsets[owner][session_id] = page.retry_offset
         for child in children:
             if (child, owner) not in scheduled and child not in completed[owner]:
                 pending.append((child, discovered.get(child), owner))
@@ -358,6 +355,8 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
         if owned_remaining:
             traversals[owner] = {
                 "pending": owned_remaining,
+                "offsets": offsets[owner],
+                "retry_offsets": retry_offsets[owner],
                 "completed": sorted(completed[owner])
                 if any(task_owner == owner for _, _, task_owner in pending)
                 else [],
@@ -370,8 +369,6 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
         state_path,
         json.dumps(
             {
-                "offsets": offsets,
-                "retry_offsets": retry_offsets,
                 "after": after,
                 "traversals": traversals,
             }
