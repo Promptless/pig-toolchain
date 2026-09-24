@@ -26,6 +26,9 @@ DEFAULT_WORKER_BASE_URL = "https://pig.promptless.ai"
 DEFAULT_DASHBOARD_BASE_URL = "https://app.gopromptless.ai"
 
 
+DEFAULT_HOSTED_API_BASE_URL = "https://api.gopromptless.ai"
+
+
 HOSTED_ENROLLMENT_START_PATH = "/instruction-hub/enroll/start"
 
 
@@ -345,6 +348,8 @@ class EnrollmentSession:
     poll_url: str
     expires_at: dt.datetime
     poll_interval_seconds: int
+    hosted_api_base_url: str | None = None
+    approval_url: str | None = None
 
 
 @dataclass(frozen=True)

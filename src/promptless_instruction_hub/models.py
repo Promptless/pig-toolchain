@@ -101,8 +101,9 @@ class TraceIngestionConfig(BaseModel):
     enabled: bool = Field(default=False, strict=True)
     worker_base_url: str | None = None
     dashboard_base_url: str | None = None
+    hosted_api_base_url: str | None = None
 
-    @field_validator("worker_base_url", "dashboard_base_url")
+    @field_validator("worker_base_url", "dashboard_base_url", "hosted_api_base_url")
     @classmethod
     def validate_endpoint(cls, value: str | None) -> str | None:
         """Only distribute HTTPS origins, without embedded credentials."""

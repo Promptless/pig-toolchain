@@ -30,6 +30,7 @@ RUNTIME_MODULES = (
     "cursor/database.py",
     "cursor/wire.py",
     "enrollment.py",
+    "device_enrollment.py",
     "host_config.py",
     "metadata.py",
     "notices.py",
