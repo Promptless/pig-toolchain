@@ -24,7 +24,7 @@ from .helpers import (
 
 def test_build_ships_external_plugin_authoring_skill_in_pig(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root, marketplace_id="acme-tools")
+    init_hub(hub_root, marketplace_id="acme-tools", org="Promptless")
     (hub_root / "plugins/dev.yaml").write_text("id: dev\nname: Dev\nincludes: []\n")
     config_path = hub_root / "hub.yaml"
     config = yaml.safe_load(config_path.read_text())
@@ -251,7 +251,7 @@ def test_build_renders_stable_plugins_as_separate_marketplace_plugins(tmp_path: 
 
 def test_default_source_path_anchors_to_hub_assets_dir(tmp_path: Path) -> None:
     hub_root = tmp_path / "assets" / "customer" / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "plugins/pig.yaml").write_text("id: pig\nname: PIG\nincludes:\n  - skill:review-docs\n")
     skill_root = hub_root / "assets/skills/review-docs"
     skill_root.mkdir(parents=True)
@@ -264,7 +264,7 @@ def test_default_source_path_anchors_to_hub_assets_dir(tmp_path: Path) -> None:
 
 def test_build_check_fails_when_generated_output_is_stale(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     scan_hub(hub_root, FIXTURES / "dogfood-source")
     build_hub(hub_root)
     (hub_root / "dist/codex/pig/extra.txt").write_text("stale")
@@ -289,7 +289,7 @@ def test_build_check_fails_when_root_generated_output_is_stale(
     expected_stale_path: str,
 ) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     scan_hub(hub_root, FIXTURES / "dogfood-source")
     build_hub(hub_root)
     (hub_root / generated_path).write_text("{}\n")
@@ -300,7 +300,7 @@ def test_build_check_fails_when_root_generated_output_is_stale(
 
 def test_build_check_passes_after_generated_output_is_committed(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     scan_hub(hub_root, FIXTURES / "dogfood-source")
     _git(hub_root, "init")
     _git(hub_root, "config", "user.email", "instruction-hub@example.com")
@@ -315,7 +315,7 @@ def test_build_check_passes_after_generated_output_is_committed(tmp_path: Path) 
 
 def test_verify_fully_compiles_without_changing_stale_worktree(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     scan_hub(hub_root, FIXTURES / "dogfood-source")
     (hub_root / "dist/stale.txt").write_text("verify must preserve this file\n")
     before = _snapshot_tree(hub_root)
@@ -331,7 +331,7 @@ def test_verify_fully_compiles_without_changing_stale_worktree(tmp_path: Path) -
 
 def test_verify_failure_does_not_change_worktree(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "plugins/pig.yaml").write_text("id: pig\nname: PIG\nincludes:\n  - skill:missing\n")
     before = _snapshot_tree(hub_root)
 
@@ -347,7 +347,7 @@ def test_verify_failure_does_not_change_worktree(tmp_path: Path) -> None:
 )
 def test_build_preserves_native_cursor_rule_frontmatter(tmp_path: Path, settings: str) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "plugins/pig.yaml").write_text("id: pig\nname: PIG\nincludes:\n  - rule:docs-style\n")
     contents = (
         f"---\ndescription: Apply the documentation conventions\n{settings}\n---\n\n# Style\n\nUse clear prose.\n"

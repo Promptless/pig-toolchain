@@ -52,7 +52,7 @@ def test_empty_hub_fixture_bootstraps(tmp_path: Path) -> None:
     hub_root = tmp_path / "empty-hub"
     shutil.copytree(FIXTURES / "empty-hub", hub_root)
 
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     result = build_hub(hub_root)
 
     assert result.asset_count == 0
@@ -148,7 +148,7 @@ def test_optional_hub_tests_keep_command_and_platform_in_caller_configuration() 
 
 @pytest.mark.parametrize("plugin_path", [None, ".", "plugins/doc-detective", "plugins/Doc Detective"])
 def test_generated_release_validates_against_shipped_schema(tmp_path: Path, plugin_path: str | None) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     if plugin_path is not None:
         write_external(tmp_path, external_definition(path=plugin_path))
     build_hub(tmp_path)

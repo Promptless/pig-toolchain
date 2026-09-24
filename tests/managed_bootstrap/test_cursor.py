@@ -527,7 +527,7 @@ def test_cursor_hooks_detach_slow_work_and_close_output_pipes(tmp_path: Path) ->
     if node is None:
         pytest.skip("Node is required for Cursor hooks")
     hub = tmp_path / "hub"
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     enable_trace_ingestion(hub)
     build_hub(hub)
     plugin = hub / "dist/cursor/pig"
