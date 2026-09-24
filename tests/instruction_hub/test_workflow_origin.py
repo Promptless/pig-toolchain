@@ -176,6 +176,7 @@ def test_gitlab_bootstrap_fetches_configured_repository_and_ref(
         env={
             **os.environ,
             **variables,
+            "CI_PROJECT_DIR": str(tmp_path),
             "CHECKED_OUT": str(checked_out),
             "TMPDIR": str(tmp_path),
             # Keep the configured HTTPS origin intact while fetching real Git data
