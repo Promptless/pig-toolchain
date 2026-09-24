@@ -15,6 +15,10 @@ from promptless_instruction_hub.config import MANAGED_RUNTIME_MANIFEST_PATH
 from promptless_instruction_hub.errors import InstructionHubError
 from promptless_instruction_hub.fs import JsonValue, read_json_mapping, write_json
 from promptless_instruction_hub.models import PIG_PLUGIN_ID, Harness, HubConfig, PluginDefinition
+from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.runtime_config import (
+    RUNTIME_CONFIG_NAME,
+    RUNTIME_CONFIG_SCHEMA_VERSION,
+)
 
 RuntimeStatus = Literal["included"]
 
@@ -127,6 +131,7 @@ def render_managed_runtimes(
         return ()
 
     _copy_runtime_bundle(target_root)
+    _write_runtime_config(target_root, config)
     _write_host_runtime_hooks(target_root, target)
     record = ManagedRuntimeRecord(
         id=HOST_RUNTIME_ID,
@@ -146,6 +151,19 @@ def render_managed_runtimes(
     )
     _write_plugin_manifest(target_root, (record,))
     return (record,)
+
+
+def _write_runtime_config(target_root: Path, config: HubConfig) -> None:
+    """Keep deployment configuration separate from enrollment metadata and code hashes."""
+
+    runtime_config: dict[str, JsonValue] = {"schema_version": RUNTIME_CONFIG_SCHEMA_VERSION}
+    for key, value in (
+        ("worker_base_url", config.trace_ingestion.worker_base_url),
+        ("dashboard_base_url", config.trace_ingestion.dashboard_base_url),
+    ):
+        if value is not None:
+            runtime_config[key] = value
+    write_json(target_root / RUNTIME_CONFIG_NAME, runtime_config)
 
 
 def _copy_runtime_bundle(target_root: Path) -> None:
