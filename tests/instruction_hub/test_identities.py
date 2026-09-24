@@ -159,7 +159,10 @@ def test_legacy_package_definitions_rejected_before_writes(
     legacy.write_text(definition)
     before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
 
-    assert main([command, "--hub", str(tmp_path)]) == 1
+    args = [command, "--hub", str(tmp_path)]
+    if command == "init":
+        args.extend(["--org", "Acme"])
+    assert main(args) == 1
 
     error = capsys.readouterr().err
     assert "legacy plugin directory" in error
