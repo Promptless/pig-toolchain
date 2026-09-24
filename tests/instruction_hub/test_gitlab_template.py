@@ -21,6 +21,7 @@ def _run_template_job(
         env={
             **os.environ,
             "GITHUB_ACTIONS": "false",
+            "GITLAB_CI": "true",
             "INPUT_GITHUB_TOKEN": "",
             "CI_PROJECT_DIR": str(repo),
             "CI_REPOSITORY_URL": str(repo.parent / "remote.git"),
@@ -75,11 +76,20 @@ def test_gitlab_publish_rejects_unsafe_refs_and_fetch_failure(tmp_path: Path, ex
 
 @pytest.mark.parametrize(
     "changed_path",
-    [".gitlab-ci.yml", ".gitignore", "hub.yaml", "hub.repo-context.json", "assets/new.md", "plugins/new.yaml"],
+    [
+        ".github/workflows/publish.yml",
+        ".gitlab-ci.yml",
+        ".gitignore",
+        "hub.yaml",
+        "hub.repo-context.json",
+        "assets/new.md",
+        "plugins/new.yaml",
+    ],
 )
 def test_gitlab_publish_skips_superseded_source(tmp_path: Path, changed_path: str) -> None:
     repo = _init_action_repo(tmp_path / "superseded", targets=("cursor",))
     initial = _git_output(repo, "rev-parse", "HEAD").strip()
+    (repo / changed_path).parent.mkdir(parents=True, exist_ok=True)
     with (repo / changed_path).open("a") as source:
         source.write("\n# Updated hub source\n")
     _git(repo, "add", changed_path)

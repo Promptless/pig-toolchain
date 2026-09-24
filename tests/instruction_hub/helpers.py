@@ -226,6 +226,8 @@ def _run_action(
 ) -> subprocess.CompletedProcess[str]:
     env = {
         **os.environ,
+        "GITHUB_ACTIONS": "false",
+        "GITLAB_CI": "false",
         "GITHUB_ACTION_PATH": str(REPO_ROOT),
         "GITHUB_WORKSPACE": str(repo),
         "GITHUB_REPOSITORY": "Promptless/instruction-hub-test",

@@ -79,6 +79,13 @@ pointers on the source branch for the configured Claude, Codex, and Cursor targe
 The caller above runs publication on pushes to `main` or manual runs on `main`,
 and its concurrency group prevents overlapping publish runs.
 
+The shared publisher fetches `source-branch` before compilation. If a queued
+job is behind changes to hub source or CI configuration, it skips publication
+without pushing either branch. Pointer-only and unrelated commits are
+fast-forwarded before continuing. Fetch, comparison, and fast-forward failures
+stop publication. Keep CI serialization enabled; the atomic push also rejects
+branch changes that arrive after the source and release revisions are captured.
+
 Publishing uses the caller repository's automatic `GITHUB_TOKEN`; no additional
 secret is required. Grant `contents: write` as shown and ensure repository rules
 allow that token to push to both the source and release branches.
@@ -146,9 +153,12 @@ include:
 
 The compiler defaults to `main`: each job fetches the latest merged toolchain
 when it starts and logs the resolved commit for diagnostics. Keep both the
-remote template URL and `toolchain-ref` on `main`. The template runs the same `scripts/run.sh` entrypoint as the
-GitHub Action, with GitLab workspace, repository, identity, and branch checks
-supplied by the template.
+remote template URL and `toolchain-ref` on `main`. When pinning, use the same
+commit in the template URL and `toolchain-ref`. The template runs the same
+`scripts/run.sh` entrypoint as the GitHub Action, with GitLab workspace,
+repository, identity, and branch checks supplied by the template. Source
+freshness checks live in the shared publisher, so a newer template must not
+be paired with an older toolchain.
 
 ### Direct action usage
 

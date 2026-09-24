@@ -1,7 +1,7 @@
 spec:
   inputs:
     toolchain-ref:
-      description: Use main for the latest merged toolchain.
+      description: Use main, or pin to the same commit as the template.
       default: main
       regex: '^(main|[0-9a-f]{40})$'
     release-branch:
@@ -44,6 +44,7 @@ instruction-hub-check:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes: &hub-source
+        - .github/workflows/**/*
         - .gitlab-ci.yml
         - .gitignore
         - hub.yaml
@@ -63,18 +64,6 @@ instruction-hub-publish:
       # GitLab checks out a detached commit. Only publish default-branch jobs.
       test "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH"
       test -z "${CI_COMMIT_TAG:-}"
-      git fetch origin "+refs/heads/$CI_DEFAULT_BRANCH:refs/remotes/origin/$CI_DEFAULT_BRANCH"
-      # A queued job must not replace a newer hub release with older source.
-      if git diff --quiet HEAD "origin/$CI_DEFAULT_BRANCH" -- \
-        .gitlab-ci.yml .gitignore hub.yaml hub.repo-context.json assets plugins; then
-        # Include pointer-only commits from earlier publish jobs before pushing.
-        git merge --ff-only "origin/$CI_DEFAULT_BRANCH"
-      else
-        status=$?
-        test "$status" -eq 1 || exit "$status"
-        echo "Hub source changed while this job was queued; a newer pipeline owns publication."
-        exit 0
-      fi
     - |
       GITHUB_ACTION_PATH="$INSTRUCTION_HUB_TOOLCHAIN_DIR" \
       GITHUB_WORKSPACE="$CI_PROJECT_DIR" \

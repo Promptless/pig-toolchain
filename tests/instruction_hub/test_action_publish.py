@@ -194,6 +194,7 @@ def test_action_publish_writes_release_branch_and_marketplace_pointers_for_stabl
     _configure_split_plugin_hub(repo, ("claude", "codex", "cursor"))
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "split stable packages")
+    _git(repo, "push", "origin", "main")
 
     result = _run_action(repo, output_path)
 
@@ -300,6 +301,7 @@ def test_action_publish_bumps_and_rewrites_outputs_when_package_id_changes(tmp_p
     _configure_split_plugin_hub(repo, ("claude", "codex", "cursor"))
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "split stable packages")
+    _git(repo, "push", "origin", "main")
 
     first = _run_action(repo, tmp_path / "github-output-first.txt")
     assert first.returncode == 0, first.stdout + first.stderr
@@ -315,6 +317,7 @@ def test_action_publish_bumps_and_rewrites_outputs_when_package_id_changes(tmp_p
     )
     _git(repo, "add", "-A")
     _git(repo, "commit", "-m", "rename dev package id")
+    _git(repo, "push", "origin", "main")
 
     second = _run_action(repo, tmp_path / "github-output-second.txt")
     assert second.returncode == 0, second.stdout + second.stderr
@@ -559,15 +562,18 @@ def test_action_publish_bumps_generated_plugin_version_when_assets_change(tmp_pa
     (skill_root / "SKILL.md").write_text("# Review Docs\n")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "add review docs")
+    _git(repo, "push", "origin", "main")
 
     first = _run_action(repo, tmp_path / "github-output-first.txt", extra_env=env)
     assert first.returncode == 0, first.stdout + first.stderr
     _git(repo, "fetch", "origin", "release/stable")
     assert _release_branch_plugin_versions(repo) == {"0.1.0"}
+    first_source = _git_output(repo, "rev-parse", "HEAD").strip()
 
     (skill_root / "SKILL.md").write_text("# Review Docs\n\nPrefer concise summaries.\n")
     _git(repo, "add", "assets/skills/review-docs/SKILL.md")
     _git(repo, "commit", "-m", "update review docs")
+    _git(repo, "push", "origin", "main")
 
     second = _run_action(repo, tmp_path / "github-output-second.txt", extra_env=env)
     assert second.returncode == 0, second.stdout + second.stderr
@@ -583,6 +589,44 @@ def test_action_publish_bumps_generated_plugin_version_when_assets_change(tmp_pa
     third = _run_action(repo, tmp_path / "github-output-third.txt", extra_env=env)
     assert third.returncode == 0, third.stdout + third.stderr
     assert "No release branch changes to publish." in third.stdout
+
+    published_refs = _git_output(repo, "ls-remote", "origin", "refs/heads/*")
+    _git(repo, "checkout", "--detach", first_source)
+    stale = _run_action(repo, tmp_path / "github-output-stale.txt", extra_env={**env, "GITHUB_ACTIONS": "true"})
+
+    assert stale.returncode == 0, stale.stdout + stale.stderr
+    assert "a newer pipeline owns publication" in stale.stdout
+    assert _git_output(repo, "ls-remote", "origin", "refs/heads/*") == published_refs
+    assert _git_output(repo, "rev-parse", "HEAD").strip() == first_source
+
+
+@pytest.mark.parametrize("ci_env", [{"GITHUB_ACTIONS": "true"}, {"GITLAB_CI": "true"}])
+@pytest.mark.parametrize("reset_kind", ["ancestor", "diverged"])
+def test_action_publish_skips_ci_commit_removed_from_source_branch(
+    tmp_path: Path, ci_env: dict[str, str], reset_kind: str
+) -> None:
+    repo = _init_action_repo(tmp_path / "publish-reset", targets=("gemini",))
+    first = _run_action(repo, tmp_path / "first.txt")
+    assert first.returncode == 0, first.stdout + first.stderr
+    retained = _git_output(repo, "rev-parse", "HEAD").strip()
+    (repo / "hub.yaml").write_text((repo / "hub.yaml").read_text().replace("version: 0.1.0", "version: 0.2.0"))
+    _git(repo, "add", "hub.yaml")
+    _git(repo, "commit", "-m", "discarded hub change")
+    discarded = _git_output(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "push", "origin", "main")
+    if reset_kind == "diverged":
+        retained = _git_output(repo, "commit-tree", f"{retained}^{{tree}}", "-p", retained, "-m", "replacement").strip()
+    _git(repo, "push", "--force", "origin", f"{retained}:refs/heads/main")
+    _git(repo, "checkout", "--detach", discarded)
+    before = _git_output(repo, "ls-remote", "origin", "refs/heads/*")
+
+    rerun = _run_action(repo, tmp_path / "rerun.txt", extra_env=ci_env)
+
+    assert rerun.returncode == 0, rerun.stdout + rerun.stderr
+    assert "no longer on source branch" in rerun.stdout
+    assert _git_output(repo, "ls-remote", "origin", "refs/heads/*") == before
+    assert _git_output(repo, "rev-parse", "HEAD").strip() == discarded
+    assert _git_output(repo, "status", "--short") == ""
 
 
 def test_action_publish_removes_legacy_promptless_release_metadata(tmp_path: Path) -> None:
@@ -650,6 +694,7 @@ def test_action_publish_removes_stale_pointer_when_target_is_removed(tmp_path: P
     _write_hub_config(repo, ("codex",))
     _git(repo, "add", "hub.yaml")
     _git(repo, "commit", "-m", "remove claude target")
+    _git(repo, "push", "origin", "main")
 
     second = _run_action(repo, tmp_path / "github-output-second.txt")
 
