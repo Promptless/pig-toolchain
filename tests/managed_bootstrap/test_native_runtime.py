@@ -5,9 +5,11 @@ from __future__ import annotations
 import errno
 import io
 import json
+import os
 import shutil
 import ssl
 import stat
+import subprocess
 import urllib.error
 import zipfile
 from pathlib import Path
@@ -31,6 +33,44 @@ def archive_bytes(root: Path) -> bytes:
             if path.is_file():
                 archive.write(path, path.relative_to(root).as_posix())
     return output.getvalue()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX launchers require a Unix host")
+def test_assembly_restores_launchers_after_windows_artifact_copy(tmp_path: Path) -> None:
+    from scripts.build_native_runtime import add_launchers, assemble, write_manifest
+
+    inputs = []
+    for platform_id in native_bundle.PLATFORMS:
+        root = tmp_path / platform_id
+        root.mkdir()
+        add_launchers(root)
+        (root / "cacert.pem").write_text("CA fixture\n")
+        executable = root / (
+            "promptless-host-runtime.exe" if platform_id == "windows-x86_64" else f"native/{platform_id}/runtime"
+        )
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+        executable.chmod(0o755)
+        if platform_id == "windows-x86_64":
+            # Windows ZIPs cannot preserve POSIX execute bits on these text files.
+            for name in ("promptless-host-runtime", "cursor-hook.cmd"):
+                (root / name).chmod(0o644)
+        write_manifest(root, [platform_id])
+        inputs.append(root)
+    assert inputs[-1].name == "windows-x86_64"
+    assembled = tmp_path / "assembled"
+    assemble(inputs, assembled)
+    archive = tmp_path / "native-runtime.zip"
+    archive.write_bytes(archive_bytes(assembled))
+    extracted = tmp_path / "extracted"
+    native_runtime.extract_bundle(archive, extracted)
+    assert native_bundle.validate_bundle(extracted)
+    for root in (assembled, extracted):
+        for name in ("promptless-host-runtime", "cursor-hook.cmd"):
+            launcher = root / name
+            assert stat.S_IMODE(launcher.stat().st_mode) == 0o755
+            command = ["/bin/sh", str(launcher)] if name.endswith(".cmd") else [str(launcher)]
+            subprocess.run(command, check=True, env={"PATH": ""})
 
 
 def test_build_copies_validated_native_files_and_emits_host_launchers(

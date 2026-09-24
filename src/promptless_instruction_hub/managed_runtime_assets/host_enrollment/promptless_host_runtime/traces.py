@@ -263,6 +263,10 @@ def _read_hook_context(body: bytes | None = None) -> dict[str, JsonValue]:
         body = _read_hook_input()
     if body == b"":
         return {}
+    # PowerShell pipelines using Encoding.UTF8 prepend its UTF-8 preamble.
+    # Accept that encoding marker only at the host-input boundary.
+    if body.startswith(b"\xef\xbb\xbf"):
+        body = body[3:]
     return _decode_json_object(body, "hook stdin")
 
 

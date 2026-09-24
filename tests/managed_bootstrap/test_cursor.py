@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import BinaryIO
 from collections.abc import Iterator
 
 import pytest
@@ -680,3 +681,20 @@ def test_detached_launcher_records_collector_outcome(
     diagnostic = json.loads((tmp_path / ".promptless/instruction-hub/cursor-launcher-status.json").read_text())
     assert diagnostic["status"] == status
     assert set(diagnostic) == {"status", "observed_at"}
+
+
+@pytest.mark.parametrize("preamble", [b"", b"\xef\xbb\xbf"])
+def test_cursor_launcher_preserves_powershell_utf8_input(monkeypatch: pytest.MonkeyPatch, preamble: bytes) -> None:
+    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import cli
+
+    context = {"conversation_id": "native-cursor", "generation_id": "héllo 世界"}
+    payload = preamble + json.dumps(context, ensure_ascii=False).encode("utf-8") + b"\r\n"
+    monkeypatch.setattr(cli, "_read_cursor_hook_input", lambda: payload)
+    captured: list[object] = []
+
+    def spawn(args: list[str], *, stdin: BinaryIO) -> None:
+        captured.append(json.loads(stdin.read()))
+
+    monkeypatch.setattr(cli, "_spawn_detached", spawn)
+    assert cli._launch_cursor_hook("stop") == 0
+    assert captured == [context]

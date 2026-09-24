@@ -9,6 +9,7 @@ import gzip
 import json
 import os
 import shutil
+import sqlite3
 import ssl
 import subprocess
 import tempfile
@@ -21,7 +22,7 @@ from promptless_instruction_hub.fs import read_yaml_mapping, write_yaml
 from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.native_bundle import (
     validate_bundle,
 )
-from tests.managed_bootstrap.helpers import _FakeWorkerServer, _diagnostic_log_path
+from tests.managed_bootstrap.helpers import _FakeWorkerServer, _diagnostic_log_path, _signed_policy
 from tests.managed_bootstrap.test_device_enrollment import DeviceAPI
 
 
@@ -73,7 +74,7 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
         }
         version = json.loads(run([str(runtime), "version", "--json"], env).stdout)
         assert version["sha256"] == manifest["bundle_sha256"]
-        server = _FakeWorkerServer()
+        server = _FakeWorkerServer(policy=_signed_policy(enabled_hosts=["codex", "claude", "cursor"]))
         server.start()
         try:
             env.update(PROMPTLESS_WORKER_BASE_URL=server.base_url, PROMPTLESS_DASHBOARD_BASE_URL=server.base_url)
@@ -110,7 +111,54 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
             cursor_plugin = hub / "dist/cursor/pig"
             cursor_hooks = json.loads((cursor_plugin / "hooks/hooks.json").read_text())["hooks"]
             cursor_command = cursor_hooks["sessionStart"][-1]["command"]
-            cursor_body = json.dumps({"conversation_id": "native-cursor", "workspace_roots": [str(workspace)]})
+            cursor_body = json.dumps({"conversation_id": "native-cursor", "generation_id": "native-generation"})
+            database = workspace / "state.vscdb"
+            with sqlite3.connect(database) as connection:
+                connection.execute("PRAGMA journal_mode=WAL")
+                connection.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)")
+                for key, value in (
+                    ("composerData:native-cursor", {"fullConversationHeadersOnly": [{"bubbleId": "bubble"}]}),
+                    ("bubbleId:native-cursor:bubble", {"type": 1, "text": "native Cursor héllo 世界"}),
+                ):
+                    connection.execute("INSERT INTO cursorDiskKV VALUES (?, ?)", (key, json.dumps(value)))
+            connection.close()
+            env["PROMPTLESS_CURSOR_DATABASE"] = str(database)
+            cursor_runtime = cursor_plugin / "runtime" / runtime.name
+            status_path = home / ".promptless/instruction-hub/cursor-launcher-status.json"
+            pending_path = status_path.parent / "cursor/pending"
+
+            def run_cursor(command: list[str], *, body: str = "", timeout: int = 30) -> None:
+                # Await each collector before launching the next. A coalesced
+                # non-owner's successful exit cannot conceal the owner's failure.
+                status_path.unlink(missing_ok=True)
+                result = run(command, {**env, "CURSOR_PLUGIN_ROOT": str(cursor_plugin)}, body, timeout)
+                deadline = time.monotonic() + 30
+                while not status_path.exists() and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                status = json.loads(status_path.read_text()) if status_path.exists() else {"status": "missing"}
+                if status["status"] != "completed" or list(pending_path.glob("*.json")):
+                    status_path.unlink(missing_ok=True)
+                    replay = subprocess.run(
+                        [str(cursor_runtime), "cursor-hook", "--lifecycle", "stop"],
+                        env=env,
+                        input=cursor_body,
+                        text=True,
+                        encoding="utf-8",
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    replay_deadline = time.monotonic() + 30
+                    while replay.returncode == 0 and not status_path.exists() and time.monotonic() < replay_deadline:
+                        time.sleep(0.05)
+                    diagnostic_path = _diagnostic_log_path(home)
+                    diagnostics = (
+                        diagnostic_path.read_text(encoding="utf-8") if diagnostic_path.exists() else "no diagnostics"
+                    )
+                    raise AssertionError(
+                        f"{status}\nhost stdout={result.stdout}\nhost stderr={result.stderr}"
+                        f"\ndirect cursor-hook={replay.returncode}: {replay.stdout}\n{replay.stderr}\n{diagnostics}"
+                    )
+
             if os.name == "nt":
                 payload_file = workspace / "cursor input's café.json"
                 payload_file.write_text(cursor_body, encoding="utf-8")
@@ -125,15 +173,10 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
                 for name in ("powershell", "pwsh"):
                     shell = shutil.which(name)
                     assert shell is not None
-                    run(
-                        [shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-c", wrapper],
-                        env,
-                        timeout=30,
-                    )
+                    run_cursor([shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-c", wrapper])
                     terminal_wrapper = wrapper.replace(" session_start", " stop")
-                    run(
+                    run_cursor(
                         [shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-c", terminal_wrapper],
-                        env,
                         timeout=3,
                     )
                 node = shutil.which("node")
@@ -144,38 +187,18 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
             else:
                 for shell in ("/bin/sh", "/bin/bash", "/bin/zsh", "/bin/dash"):
                     if Path(shell).exists():
-                        run(
-                            [shell, "-c", cursor_command],
-                            {**env, "CURSOR_PLUGIN_ROOT": str(cursor_plugin)},
-                            cursor_body,
-                            timeout=30,
-                        )
-                        run(
-                            [shell, "-c", cursor_hooks["stop"][-1]["command"]],
-                            {**env, "CURSOR_PLUGIN_ROOT": str(cursor_plugin)},
-                            cursor_body,
-                            timeout=3,
-                        )
-            # The native Cursor foreground returns before its supervised collector.
-            status_path = home / ".promptless/instruction-hub/cursor-launcher-status.json"
-            deadline = time.monotonic() + 20
-            while not status_path.exists() and time.monotonic() < deadline:
-                time.sleep(0.05)
-            assert status_path.exists(), "Frozen Cursor supervisor did not finish"
-            status = json.loads(status_path.read_text())
-            if status["status"] != "completed":
-                cursor_runtime = cursor_plugin / "runtime" / runtime.name
-                replay = subprocess.run(
-                    [str(cursor_runtime), "cursor-notify", "--lifecycle", "stop"],
-                    env=env,
-                    input=cursor_body,
-                    text=True,
-                    encoding="utf-8",
-                    capture_output=True,
-                    timeout=90,
-                )
-                diagnostics = _diagnostic_log_path(home).read_text(encoding="utf-8")
-                raise AssertionError(f"{status}\n{replay.stdout}\n{replay.stderr}\n{diagnostics}")
+                        run_cursor([shell, "-c", cursor_command], body="\ufeff" + cursor_body)
+                        run_cursor([shell, "-c", cursor_hooks["stop"][-1]["command"]], body=cursor_body, timeout=3)
+            cursor_records = [
+                json.loads(line)
+                for batch in server.trace_batches
+                if batch["source"] == "cursor"
+                for chunk in batch["chunks"]
+                for line in gzip.decompress(base64.b64decode(chunk["content_base64"])).splitlines()
+            ]
+            assert any(row["event"].get("text") == "native Cursor héllo 世界" for row in cursor_records), (
+                "Frozen Cursor hooks did not export and upload the seeded native SQLite event"
+            )
         finally:
             server.stop()
         # A local TLS worker proves verification remains enabled and custom roots

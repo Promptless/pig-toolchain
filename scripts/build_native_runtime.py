@@ -150,6 +150,8 @@ def assemble(inputs: list[Path], output: Path) -> None:
     output.mkdir(parents=True)
     for root in inputs:
         shutil.copytree(root, output, dirs_exist_ok=True)
+    # Windows artifacts do not carry POSIX execute bits for the shared launchers.
+    add_launchers(output)
     write_manifest(output, platforms)
     validate_bundle(output, source_sha256=runtime_source_sha256())
 

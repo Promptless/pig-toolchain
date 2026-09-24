@@ -152,6 +152,12 @@ def _copy_runtime_bundle(target_root: Path) -> NativeManifest:
     manifest = validate_bundle(source, complete=False)
     runtime_root = target_root / HOST_RUNTIME_OUTPUT_DIR
     shutil.copytree(source, runtime_root, dirs_exist_ok=True)
+    # Keep Git from changing byte-hashed files on publication or checkout. The
+    # rule belongs outside the validated runtime inventory and only covers it.
+    attributes_path = target_root / ".gitattributes"
+    existing = attributes_path.read_bytes() if attributes_path.exists() else b""
+    separator = b"\n" if existing and not existing.endswith(b"\n") else b""
+    attributes_path.write_bytes(existing + separator + f"/{HOST_RUNTIME_OUTPUT_DIR}/** -text\n".encode())
     return manifest
 
 
