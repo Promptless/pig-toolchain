@@ -30,11 +30,16 @@ from .storage import _atomic_write_text, _ledger_path
 from .validation import _non_empty, _string_value
 
 
+def _claude_config_dir() -> Path:
+    override = _non_empty(os.environ.get("CLAUDE_CONFIG_DIR"))
+    return Path(override).expanduser() if override is not None else Path.home() / ".claude"
+
+
 def _native_trace_globs(host: Host) -> tuple[str, ...]:
     if host == "cursor":
         return (str(cursor_capture.spool_root() / "journals/*.jsonl"),)
     if host == "claude":
-        return (str(Path.home() / ".claude/projects/**/*.jsonl"),)
+        return (f"{glob.escape(str(_claude_config_dir()))}/projects/**/*.jsonl",)
     if host == "claude-desktop":
         return tuple(str(root / "**/audit.jsonl") for root in _claude_desktop_trace_roots())
     codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
@@ -107,7 +112,7 @@ def _codex_config_status() -> dict[str, JsonValue]:
 
 
 def _claude_config_status() -> dict[str, JsonValue]:
-    settings_path = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser() / "settings.json"
+    settings_path = _claude_config_dir() / "settings.json"
     result: dict[str, JsonValue] = {"path": str(settings_path), "exists": settings_path.exists()}
     if not settings_path.exists():
         result["managed_config_detected"] = False
@@ -211,7 +216,7 @@ def _managed_block_pattern() -> re.Pattern[str]:
 
 
 def _ensure_claude_config(*, trace_upload_endpoint: str) -> ConfigResult:
-    settings_path = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser() / "settings.json"
+    settings_path = _claude_config_dir() / "settings.json"
     settings = _read_settings(settings_path) if settings_path.exists() else {}
     env = settings.get("env")
     managed = isinstance(env, dict) and _string_value(env.get(CLAUDE_MANAGED_ENV_MARKER)) == "1"
