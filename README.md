@@ -302,6 +302,41 @@ the definition. Offline builds use this lock; CI build and publish modes refresh
 it. Catalog definitions use `ref`; locks, release provenance, and marketplaces
 use the resolved `sha`. Consumers update installed plugins through their host.
 
+Private upstream repositories need read credentials in the CI job that resolves
+and verifies them. Store a JSON object in a CI secret, keyed by the exact HTTPS
+repository URL used in the plugin's `source.url`:
+
+```json
+{
+  "https://github.com/acme/private-plugins.git": {
+    "username": "x-access-token",
+    "password": "READ_ONLY_TOKEN"
+  }
+}
+```
+
+For either reusable GitHub workflow, pass the secret on the calling job:
+
+```yaml
+secrets:
+  external-plugin-credentials: ${{ secrets.EXTERNAL_PLUGIN_CREDENTIALS }}
+```
+
+For the composite action, pass it as the `external-plugin-credentials` input.
+For GitLab or direct CLI use, set `PIG_EXTERNAL_PLUGIN_CREDENTIALS` in the job
+environment (a masked CI variable). Use each Git provider's token username and
+read-only repository access. Credentials are applied only to the matching fetch;
+they are not written into Git configuration, locks, or generated artifacts.
+Authenticated fetches reject redirects, so configure the repository's canonical
+HTTPS URL without encoded path segments, dot segments, or a trailing slash.
+Existing local Git credential helpers continue to work when explicit credentials
+are absent.
+
+CI secrets may be unavailable on fork pull requests or unprotected branches;
+those jobs cannot resolve private sources without an appropriately trusted
+workflow. These credentials serve CI verification; users installing a private
+plugin still need access through their agent host.
+
 The generated PIG plugin includes an
 [`add-external-plugin` skill](src/promptless_instruction_hub/managed_skill_assets/add-external-plugin/shared/SKILL.md)
 with instructions for verification, updates, rollback, private repositories,

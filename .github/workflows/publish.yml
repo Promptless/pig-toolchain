@@ -2,6 +2,10 @@ name: Publish Instruction Hub
 
 on:
   workflow_call:
+    secrets:
+      external-plugin-credentials:
+        description: Repository-scoped read credentials for private external plugins (JSON).
+        required: false
     inputs:
       hub-root:
         description: Path to the Instruction Hub root.
@@ -64,6 +68,7 @@ jobs:
         with:
           mode: publish
           hub-root: ${{ inputs.hub-root }}
+          external-plugin-credentials: ${{ secrets.external-plugin-credentials }}
           release-branch: ${{ inputs.release-branch }}
           source-branch: ${{ inputs.source-branch }}
           github-token: ${{ github.token }}
