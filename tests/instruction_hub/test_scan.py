@@ -13,7 +13,10 @@ from promptless_instruction_hub.scan.hub import scan_hub
 from .helpers import (
     FIXTURES,
     _assert_no_promptless_directory,
+    _snapshot_tree,
 )
+
+SKILL_SOURCE_ROOTS = (".agents/skills", ".claude/skills", ".cursor/skills")
 
 
 def test_init_creates_empty_hub_contract(tmp_path: Path) -> None:
@@ -153,52 +156,140 @@ def test_scan_imports_cursor_mcp_override_when_root_differs(tmp_path: Path) -> N
     assert cursor_mcp_config["mcpServers"]["shared"]["command"] == "cursor-server"
 
 
-def test_scan_normalizes_lowercase_skill_file_to_canonical_name(tmp_path: Path) -> None:
+@pytest.mark.parametrize("source_dir", SKILL_SOURCE_ROOTS)
+def test_scan_normalizes_lowercase_skill_file_to_canonical_name(tmp_path: Path, source_dir: str) -> None:
     hub_root = tmp_path / "hub"
     source_root = tmp_path / "source"
-    skill_root = source_root / ".agents/skills/lowercase"
+    skill_root = source_root / source_dir / "lowercase"
     skill_root.mkdir(parents=True)
     (skill_root / "skill.md").write_text("# Lowercase\n")
     init_hub(hub_root)
 
-    scan_hub(hub_root, source_root)
+    result = scan_hub(hub_root, source_root)
 
+    assert result.imported_skills == ("lowercase",)
     imported_names = {path.name for path in (hub_root / "assets/skills/lowercase").iterdir()}
     assert "SKILL.md" in imported_names
     assert "skill.md" not in imported_names
     build_hub(hub_root)
 
 
-def test_scan_rejects_skill_slug_collisions(tmp_path: Path) -> None:
+def test_scan_imports_independent_skills_from_all_host_roots(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     source_root = tmp_path / "source"
-    first_skill = source_root / ".agents/skills/Review Docs"
-    second_skill = source_root / ".agents/skills/review-docs"
+    skills = {".agents/skills": "Shared Review", ".claude/skills": "Claude Review", ".cursor/skills": "Cursor Review"}
+    for source_dir, name in skills.items():
+        skill_root = source_root / source_dir / name
+        skill_root.mkdir(parents=True)
+        (skill_root / "SKILL.md").write_text(f"# {name}\n")
+        (skill_root / "reference.md").write_text(f"Reference for {name}\n")
+    init_hub(hub_root)
+
+    result = scan_hub(hub_root, source_root)
+    build_hub(hub_root)
+
+    assert set(result.imported_skills) == {"shared-review", "claude-review", "cursor-review"}
+    pig_package = (hub_root / "plugins/pig.yaml").read_text()
+    for name in skills.values():
+        asset_id = name.lower().replace(" ", "-")
+        imported_root = hub_root / "assets/skills" / asset_id
+        assert (imported_root / "SKILL.md").read_text() == f"# {name}\n"
+        assert (imported_root / "reference.md").read_text() == f"Reference for {name}\n"
+        assert f"skill:{asset_id}" in pig_package
+
+
+@pytest.mark.parametrize(
+    ("first_root", "second_root"),
+    [
+        (".agents/skills", ".agents/skills"),
+        (".claude/skills", ".claude/skills"),
+        (".cursor/skills", ".cursor/skills"),
+        (".agents/skills", ".claude/skills"),
+        (".agents/skills", ".cursor/skills"),
+        (".claude/skills", ".cursor/skills"),
+    ],
+)
+def test_scan_rejects_skill_slug_collisions_before_mutating(tmp_path: Path, first_root: str, second_root: str) -> None:
+    hub_root = tmp_path / "hub"
+    source_root = tmp_path / "source"
+    first_skill = source_root / first_root / "Review Docs"
+    second_skill = source_root / second_root / "review-docs"
     first_skill.mkdir(parents=True)
     second_skill.mkdir(parents=True)
     (first_skill / "SKILL.md").write_text("# First\n")
     (second_skill / "SKILL.md").write_text("# Second\n")
+    independent_skill = source_root / ".agents/skills/000-independent"
+    independent_skill.mkdir(parents=True)
+    (independent_skill / "SKILL.md").write_text("# Independent\n")
     init_hub(hub_root)
+    existing_skill = hub_root / "assets/skills/review-docs"
+    existing_skill.mkdir()
+    (existing_skill / "SKILL.md").write_text("# Existing customer skill\n")
+    (existing_skill / "notes.md").write_text("Keep customer edits.\n")
+    before_scan = _snapshot_tree(hub_root)
 
-    with pytest.raises(InstructionHubError, match="both map to asset id"):
+    with pytest.raises(InstructionHubError, match="both map to asset id") as exc_info:
         scan_hub(hub_root, source_root)
+
+    assert str(first_skill) in str(exc_info.value)
+    assert str(second_skill) in str(exc_info.value)
+    assert _snapshot_tree(hub_root) == before_scan
 
 
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable on this platform")
-def test_scan_rejects_symlinked_source_skill_directories(tmp_path: Path) -> None:
+@pytest.mark.parametrize("source_dir", SKILL_SOURCE_ROOTS)
+def test_scan_rejects_symlinked_source_skill_directories(tmp_path: Path, source_dir: str) -> None:
     hub_root = tmp_path / "hub"
     source_root = tmp_path / "source"
     outside_skill = tmp_path / "outside-skill"
     outside_skill.mkdir()
     (outside_skill / "SKILL.md").write_text("# Outside\n")
-    (source_root / ".agents/skills").mkdir(parents=True)
-    os.symlink(outside_skill, source_root / ".agents/skills/outside")
+    (source_root / source_dir).mkdir(parents=True)
+    os.symlink(outside_skill, source_root / source_dir / "outside")
     init_hub(hub_root)
 
     with pytest.raises(InstructionHubError, match="symlink"):
         scan_hub(hub_root, source_root)
 
     assert not (hub_root / "assets/skills/outside").exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable on this platform")
+@pytest.mark.parametrize("source_dir", SKILL_SOURCE_ROOTS)
+def test_scan_rejects_symlinked_source_skills_roots(tmp_path: Path, source_dir: str) -> None:
+    hub_root = tmp_path / "hub"
+    source_root = tmp_path / "source"
+    outside_root = tmp_path / "outside-skills"
+    (outside_root / "outside").mkdir(parents=True)
+    (outside_root / "outside/SKILL.md").write_text("# Outside\n")
+    skills_root = source_root / source_dir
+    skills_root.parent.mkdir(parents=True)
+    os.symlink(outside_root, skills_root)
+    init_hub(hub_root)
+
+    with pytest.raises(InstructionHubError, match="symlink"):
+        scan_hub(hub_root, source_root)
+
+    assert not (hub_root / "assets/skills/outside").exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable on this platform")
+@pytest.mark.parametrize("source_dir", SKILL_SOURCE_ROOTS)
+def test_scan_rejects_symlinked_files_inside_source_skills(tmp_path: Path, source_dir: str) -> None:
+    hub_root = tmp_path / "hub"
+    source_root = tmp_path / "source"
+    skill_root = source_root / source_dir / "review"
+    (skill_root / "references").mkdir(parents=True)
+    (skill_root / "SKILL.md").write_text("# Review\n")
+    outside_file = tmp_path / "private.md"
+    outside_file.write_text("Private reference\n")
+    os.symlink(outside_file, skill_root / "references/private.md")
+    init_hub(hub_root)
+
+    with pytest.raises(InstructionHubError, match="symlink"):
+        scan_hub(hub_root, source_root)
+
+    assert not (hub_root / "assets/skills/review/references/private.md").exists()
 
 
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable on this platform")

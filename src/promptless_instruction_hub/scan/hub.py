@@ -26,7 +26,7 @@ from promptless_instruction_hub.models import (
     TargetSupport,
 )
 
-SKILL_SOURCE_DIR = Path(".agents/skills")
+SKILL_SOURCE_DIRS = (Path(".agents/skills"), Path(".claude/skills"), Path(".cursor/skills"))
 ROOT_MCP_CONFIG_CANDIDATES = (Path(".mcp.json"), Path("mcp.json"), Path("mcp.yaml"), Path("mcp.yml"))
 CURSOR_MCP_CONFIG = Path(".cursor/mcp.json")
 REPO_CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md", "GEMINI.md")
@@ -39,6 +39,13 @@ class ScanResult:
     imported_skills: tuple[str, ...]
     imported_mcps: tuple[str, ...]
     inventoried_context_files: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _SkillImport:
+    source: Path
+    skill_file: Path
+    paths: tuple[Path, ...]
 
 
 def scan_hub(hub_root: Path, source_root: Path) -> ScanResult:
@@ -62,33 +69,39 @@ def scan_hub(hub_root: Path, source_root: Path) -> ScanResult:
 
 
 def _import_skills(hub_root: Path, source_root: Path) -> list[str]:
-    skills_root = source_root / SKILL_SOURCE_DIR
-    if not skills_root.exists():
-        return []
-    _ensure_source_path_importable(skills_root, source_root, "source skills directory")
-    imported: list[str] = []
-    seen_asset_ids: dict[str, Path] = {}
-    for source_skill in sorted(skills_root.iterdir()):
-        if source_skill.is_symlink():
-            msg = f"source skill directory cannot be a symlink: {source_skill}"
-            raise InstructionHubError(msg)
-        if not source_skill.is_dir():
+    imports: dict[str, _SkillImport] = {}
+    for relative_root in SKILL_SOURCE_DIRS:
+        skills_root = source_root / relative_root
+        if not skills_root.exists() and not skills_root.is_symlink():
             continue
-        _ensure_source_path_importable(source_skill, source_root, "source skill directory")
-        skill_file = _find_skill_file(source_skill)
-        if skill_file is None:
-            msg = f"source skill directory must contain SKILL.md: {source_skill}"
+        _ensure_source_path_importable(skills_root, source_root, "source skills directory")
+        if not skills_root.is_dir():
+            msg = f"source skills directory must be a directory: {skills_root}"
             raise InstructionHubError(msg)
-        asset_id = _slugify(source_skill.name)
-        previous_source = seen_asset_ids.get(asset_id)
-        if previous_source is not None:
-            msg = f"source skill directories {previous_source} and {source_skill} both map to asset id {asset_id!r}"
-            raise InstructionHubError(msg)
-        seen_asset_ids[asset_id] = source_skill
+        for source_skill in sorted(skills_root.iterdir()):
+            if source_skill.is_symlink():
+                msg = f"source skill directory cannot be a symlink: {source_skill}"
+                raise InstructionHubError(msg)
+            if not source_skill.is_dir():
+                continue
+            _ensure_source_path_importable(source_skill, source_root, "source skill directory")
+            skill_file = _find_skill_file(source_skill)
+            if skill_file is None:
+                msg = f"source skill directory must contain SKILL.md: {source_skill}"
+                raise InstructionHubError(msg)
+            asset_id = _slugify(source_skill.name)
+            previous = imports.get(asset_id)
+            if previous is not None:
+                msg = f"source skill directories {previous.source} and {source_skill} both map to asset id {asset_id!r}"
+                raise InstructionHubError(msg)
+            paths = _skill_tree_paths(source_skill, source_root)
+            imports[asset_id] = _SkillImport(source_skill, skill_file, paths)
+
+    # Discover collisions and unsafe source paths before replacing any assets.
+    for asset_id, skill in imports.items():
         destination = hub_root / "assets/skills" / asset_id
-        _copy_skill_tree(source_skill, destination, skill_file, source_root)
-        imported.append(asset_id)
-    return imported
+        _copy_skill_tree(skill, destination)
+    return list(imports)
 
 
 def _import_mcp_configs(hub_root: Path, source_root: Path) -> list[str]:
@@ -173,11 +186,9 @@ def _inventory_repo_context(hub_root: Path, source_root: Path) -> list[str]:
     return [str(file["path"]) for file in files]
 
 
-def _copy_skill_tree(source_skill: Path, destination: Path, skill_file: Path, source_root: Path) -> None:
+def _skill_tree_paths(source_skill: Path, source_root: Path) -> tuple[Path, ...]:
     skip_names = {".pytest_cache", ".ruff_cache", "__pycache__"}
-    if destination.exists():
-        shutil.rmtree(destination)
-    destination.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
     for source_path in sorted(source_skill.rglob("*")):
         relative_path = source_path.relative_to(source_skill)
         if any(part in skip_names for part in relative_path.parts):
@@ -186,7 +197,17 @@ def _copy_skill_tree(source_skill: Path, destination: Path, skill_file: Path, so
             msg = f"source skill contains a symlink that cannot be imported: {source_path}"
             raise InstructionHubError(msg)
         _ensure_source_path_importable(source_path, source_root, "source skill file")
-        target_relative_path = Path("SKILL.md") if source_path == skill_file else relative_path
+        paths.append(source_path)
+    return tuple(paths)
+
+
+def _copy_skill_tree(skill: _SkillImport, destination: Path) -> None:
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    for source_path in skill.paths:
+        relative_path = source_path.relative_to(skill.source)
+        target_relative_path = Path("SKILL.md") if source_path == skill.skill_file else relative_path
         target_path = destination / target_relative_path
         if source_path.is_dir():
             target_path.mkdir(parents=True, exist_ok=True)

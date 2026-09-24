@@ -393,6 +393,15 @@ Scan-generated metadata is committed as a root file:
 
 - `hub.repo-context.json`: scanned repository-context inventory.
 
+Run `pig scan --hub ./instruction-hub --source ./existing-repo` to import skills
+from `.agents/skills`, `.claude/skills`, and `.cursor/skills` into `assets/skills`
+and add them to the `pig` plugin. The scanner copies each skill's supporting
+files and normalizes its entry point to `SKILL.md`. Skill directory names become
+lowercase, hyphenated asset IDs. If two directories map to the same ID, scanning
+fails before copying any skills and reports both paths, even when their contents
+are identical. Rename or consolidate the source directories before retrying.
+Symlinks in imported skill trees are rejected.
+
 Native Cursor rules can be authored as `assets/rules/<id>.mdc` with a matching
 `<id>.asset.yaml` sidecar declaring `support.cursor.mode: native`. The compiler
 preserves existing rule frontmatter, including `description`, `globs`, and
