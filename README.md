@@ -766,7 +766,10 @@ The workflow `.github/workflows/native-runtime.yml` builds and tests each platfo
 assembles the complete archive, and tests a wheel built through its source
 distribution. Normal CI never publishes. Every runtime asset change must have its
 matching artifact published **before merging to `main`**, because source customers
-may follow `main`. This includes the initial rollout; merging first and publishing
+may follow `main`. First bring this branch current with all other runtime changes
+that will precede it, then regenerate and qualify the artifact from the exact
+prospective merged runtime tree. A later asset change invalidates the promoted
+hash and requires a new release. This includes the initial rollout; merging first and publishing
 later leaves those builds unable to find the required artifact. The compiler fails
 with instructions instead of substituting a local interpreter.
 
@@ -987,18 +990,6 @@ Device enrollment requires the hosted API's
 installations must configure `hosted_api_base_url` as well as their worker and
 dashboard origins. Approval still requires membership in the deployment's
 organization. Disabling automatic browser launch alone does not enable this flow.
-
-Before the customer-grade release, replace the dogfood Python implementation
-with a static native binary built and versioned by Promptless, then bundled into
-the toolchain release. Customer Instruction Hub repositories should not need
-Python, Node, uv, Go, Rust, curl, jq, or other runtime/build dependencies installed
-for the hook to run. Customer builds should only consume the already-built
-Promptless artifact bundle that the toolchain copies into plugin `runtime/`.
-
-The dogfood runtime trusts the authenticated TLS worker response and validates
-only the hosted policy shape. The customer-grade static binary must verify an
-asymmetric hosted-policy signature with a pinned Promptless public key before it
-edits local host config.
 
 Hosted policy verification is unchanged: the runtime trusts the authenticated
 TLS worker response and validates the policy shape. Native packaging does not

@@ -6,6 +6,7 @@ import errno
 import io
 import json
 import shutil
+import ssl
 import stat
 import urllib.error
 import zipfile
@@ -237,3 +238,39 @@ def test_concurrent_first_download_uses_valid_winner_cache(
     monkeypatch.setattr(Path, "rename", winner_renamed_first)
     result = native_runtime.resolve_native_bundle()
     assert native_bundle.validate_bundle(result) == native_bundle.validate_bundle(bundle)
+
+
+def test_no_redirect_device_transport_preserves_frozen_roots_and_redirect_protection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import worker
+    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
+        WorkerResponseError,
+    )
+    from tests.managed_bootstrap.test_device_enrollment import DeviceAPI
+
+    certificates = Path(__file__).parents[1] / "fixtures/native-tls"
+    shutil.copyfile(certificates / "localhost.pem", tmp_path / "cacert.pem")
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certificates / "localhost.pem", certificates / "localhost.key")
+    monkeypatch.setattr(native_bundle.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(native_bundle, "frozen_runtime_root", lambda: tmp_path)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    # Model a clean workstation with no usable OpenSSL system certificate paths.
+    monkeypatch.setattr(native_bundle.ssl, "create_default_context", lambda: ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+    api = DeviceAPI(tls_context=context)
+    try:
+        result = worker._post_json_response(
+            api.base_url + "/device-sessions", None, {}, label="device", allow_redirects=False
+        )
+        assert result["device_code"] == api.proof
+        api.status = 307
+        api.redirect = api.base_url + "/untrusted-target"
+        with pytest.raises(WorkerResponseError):
+            worker._post_json_response(
+                api.base_url + "/device-sessions", None, {}, label="device", allow_redirects=False
+            )
+        assert api.redirect_hits == 0
+    finally:
+        api.close()

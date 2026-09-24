@@ -111,3 +111,27 @@ jobs:
 
   native-runtime:
     uses: ./.github/workflows/native-runtime.yml
+
+  portable-hook-python-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Smoke test portable hook adapter on Python 3.9
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys
+          runner = "src/promptless_instruction_hub/hook_runtime.py"
+          script = "tests/fixtures/hooks-hub/assets/hooks/example/run.py"
+          for host, event in [("claude", "SessionStart"), ("codex", "SessionStart"), ("cursor", "sessionStart")]:
+              result = subprocess.run(
+                  [sys.executable, runner, "--host", host, "--entrypoint", script],
+                  input=json.dumps({"hook_event_name": event, "cwd": "/tmp/example"}),
+                  capture_output=True, text=True, check=True,
+              )
+              output = json.loads(result.stdout)
+              context = output["additional_context"] if host == "cursor" else output["hookSpecificOutput"]["additionalContext"]
+              assert context == "session_start", output
+          PY

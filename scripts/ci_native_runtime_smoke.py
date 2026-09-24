@@ -22,6 +22,7 @@ from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptles
     validate_bundle,
 )
 from tests.managed_bootstrap.helpers import _FakeWorkerServer
+from tests.managed_bootstrap.test_device_enrollment import DeviceAPI
 
 
 def run(command: list[str], env: dict[str, str], body: str = "", timeout: int = 30) -> subprocess.CompletedProcess[str]:
@@ -104,7 +105,7 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
             # Reproduce that host wrapper around the literal emitted command.
             cursor_plugin = hub / "dist/cursor/pig"
             cursor_hooks = json.loads((cursor_plugin / "hooks/hooks.json").read_text())["hooks"]
-            cursor_command = cursor_hooks["stop"][-1]["command"]
+            cursor_command = cursor_hooks["sessionStart"][-1]["command"]
             cursor_body = json.dumps({"conversation_id": "native-cursor", "workspace_roots": [str(workspace)]})
             if os.name == "nt":
                 payload_file = workspace / "cursor input's café.json"
@@ -123,6 +124,12 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
                     run(
                         [shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-c", wrapper],
                         env,
+                        timeout=30,
+                    )
+                    terminal_wrapper = wrapper.replace(" session_start", " stop")
+                    run(
+                        [shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-c", terminal_wrapper],
+                        env,
                         timeout=3,
                     )
                 node = shutil.which("node")
@@ -135,6 +142,12 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
                     if Path(shell).exists():
                         run(
                             [shell, "-c", cursor_command],
+                            {**env, "CURSOR_PLUGIN_ROOT": str(cursor_plugin)},
+                            cursor_body,
+                            timeout=30,
+                        )
+                        run(
+                            [shell, "-c", cursor_hooks["stop"][-1]["command"]],
                             {**env, "CURSOR_PLUGIN_ROOT": str(cursor_plugin)},
                             cursor_body,
                             timeout=3,
@@ -171,6 +184,20 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
             tls_env["SSL_CERT_FILE"] = str(certificates / "localhost.pem")
             run([str(runtime), "enroll", "--host", "codex"], tls_env)
             assert tls_server.session_requests, "Frozen runtime did not reach trusted HTTPS worker"
+            api = DeviceAPI(tls_context=context)
+            try:
+                api.approved = True
+                device_env = {
+                    **tls_env,
+                    "PROMPTLESS_HOSTED_API_BASE_URL": api.base_url,
+                    "PROMPTLESS_DASHBOARD_BASE_URL": api.base_url,
+                }
+                run([str(runtime), "reset", "--yes"], device_env)
+                enrolled = run([str(runtime), "enroll", "--host", "codex", "--device"], device_env)
+                assert json.loads(enrolled.stdout)["status"] == "enrolled"
+                assert api.creations and api.polls, "Frozen no-redirect device requests did not reach trusted HTTPS API"
+            finally:
+                api.close()
         finally:
             tls_server.stop()
         # Altering an external frozen library must invalidate the reported digest.

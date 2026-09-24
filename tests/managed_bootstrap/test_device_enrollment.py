@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import ssl
 import subprocess
 import threading
 import urllib.request
@@ -32,7 +33,7 @@ from .helpers import HOST_RUNTIME_BIN, _FakeWorkerServer, _clean_env, _host_stat
 class DeviceAPI:
     """Independent hosted API and browser approval surface for client tests."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, tls_context: ssl.SSLContext | None = None) -> None:
         self.creations: list[dict[str, JsonValue]] = []
         self.polls: list[str] = []
         self.approved = False
@@ -103,7 +104,10 @@ class DeviceAPI:
                     self.respond({}, 400)
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+        if tls_context is not None:
+            self.server.socket = tls_context.wrap_socket(self.server.socket, server_side=True)
+        scheme = "https" if tls_context is not None else "http"
+        self.base_url = f"{scheme}://127.0.0.1:{self.server.server_port}"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 

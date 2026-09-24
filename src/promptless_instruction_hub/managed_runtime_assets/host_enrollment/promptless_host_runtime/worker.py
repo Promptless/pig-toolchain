@@ -164,9 +164,9 @@ def _validate_signed_policy(payload: dict[str, JsonValue], host: Host) -> HostPo
     signature = _string_value(payload.get("signature"))
     if signature is None or re.fullmatch(r"[A-Za-z0-9._-]+:.+", signature) is None:
         raise BootstrapError("policy response has invalid signature shape")
-    # The dogfood endpoint relies on HTTPS transport authentication; this bootstrap only
-    # shape-checks the hosted policy signature. Before broader customer rollout, hosted
-    # policies should use asymmetric signatures verified here by the static native binary.
+    # Policy authenticity currently relies on verified HTTPS transport. This check
+    # validates the existing signature shape; native packaging does not introduce
+    # asymmetric policy-signature verification.
     schema_version = _int_value(policy_value.get("schema_version"), "policy.schema_version")
     if schema_version != 1:
         raise BootstrapError("policy.schema_version must be 1")
