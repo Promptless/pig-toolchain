@@ -106,6 +106,51 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
             assert server.trace_batches, "Frozen detached self-exec did not upload"
             chunk = server.trace_batches[0]["chunks"][0]
             assert gzip.decompress(base64.b64decode(chunk["content_base64"])) == transcript.read_bytes()
+            # Active Codex sessions can retain a deleted plugin version path.
+            # Every shell must recover a sibling native bundle, and stay quiet
+            # when cleanup leaves no runtime at all.
+            terminal_commands = (
+                [
+                    [shell, "-NoProfile", "-NonInteractive", "-Command", terminal["commandWindows"]]
+                    for name in ("powershell", "pwsh")
+                    if (shell := shutil.which(name))
+                ]
+                if os.name == "nt"
+                else [
+                    [shell, "-c", terminal["command"]]
+                    for shell in ("/bin/sh", "/bin/bash", "/bin/zsh", "/bin/dash")
+                    if Path(shell).exists()
+                ]
+            )
+            for index, terminal_command in enumerate(terminal_commands):
+                stale_trace = workspace / f"stale-trace-{index}.jsonl"
+                stale_trace.write_text(json.dumps({"message": f"recovered native trace {index}"}) + "\n")
+                stale_body = json.dumps({"sessionId": f"native-stale-{index}", "transcriptPath": str(stale_trace)})
+                before = len(server.trace_batches)
+                run(
+                    terminal_command,
+                    {**env, "PLUGIN_ROOT": str(plugin.parent / "removed-version")},
+                    stale_body,
+                    timeout=3,
+                )
+                deadline = time.monotonic() + 20
+                while len(server.trace_batches) == before and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                recovered = [
+                    gzip.decompress(base64.b64decode(chunk["content_base64"]))
+                    for batch in server.trace_batches[before:]
+                    for chunk in batch["chunks"]
+                ]
+                assert stale_trace.read_bytes() in recovered, (
+                    "Stale Codex root did not upload through the sibling runtime"
+                )
+                absent = run(
+                    terminal_command,
+                    {**env, "PLUGIN_ROOT": str(workspace / "absent/removed-version")},
+                    stale_body,
+                    timeout=3,
+                )
+                assert absent.stdout == absent.stderr == "", "Missing native roots must not expose terminal-hook errors"
             # Cursor 3.21.9 $executeHookDirect/f5a/E5a sends UTF-8 input via a
             # temporary file and adds the call operator to a quoted command.
             # Reproduce that host wrapper around the literal emitted command.
@@ -210,7 +255,7 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
             else:
                 for shell in ("/bin/sh", "/bin/bash", "/bin/zsh", "/bin/dash"):
                     if Path(shell).exists():
-                        run_cursor([shell, "-c", cursor_command], body="\ufeff" + cursor_body)
+                        run_cursor([shell, "-c", cursor_command], body="\ufeff\ufeff" + cursor_body)
                         run_cursor([shell, "-c", cursor_hooks["stop"][-1]["command"]], body=cursor_body, timeout=3)
             cursor_records = [
                 json.loads(line)

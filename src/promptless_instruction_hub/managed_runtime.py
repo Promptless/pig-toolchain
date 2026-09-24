@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import shutil
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
@@ -273,7 +274,48 @@ def _host_runtime_start_hook_command(target: Harness, *, lifecycle: str) -> dict
 
 
 def _host_runtime_terminal_hook_command(target: Harness, *, lifecycle: str) -> dict[str, JsonValue]:
-    return _native_hook_command(target, lifecycle, start=False)
+    if target == "claude":
+        # Claude has no per-platform command override. Keep exec form so Windows
+        # does not acquire a Git Bash dependency solely for stale-root recovery.
+        return _native_hook_command(target, lifecycle, start=False)
+    return {
+        "command": _posix_native_terminal_hook_command(lifecycle),
+        "commandWindows": _windows_native_terminal_hook_command(lifecycle),
+    }
+
+
+def _posix_native_terminal_hook_command(lifecycle: str) -> str:
+    """Run even after an upgrade deletes the directory cached by a live session."""
+    script = (
+        'root=${PLUGIN_ROOT:-}; [ -n "$root" ] || exit 0; '
+        'runtime="$root/runtime/promptless-host-runtime"; '
+        'if [ ! -f "$runtime" ] || [ ! -x "$runtime" ]; then '
+        "runtime=; parent=${root%/*}; "
+        'for candidate in "$parent"/*/runtime/promptless-host-runtime; do '
+        'if [ -f "$candidate" ] && [ -x "$candidate" ]; then runtime=$candidate; fi; '
+        "done; fi; "
+        '[ -n "$runtime" ] || exit 0; '
+        f'exec "$runtime" collect --host codex --lifecycle {lifecycle} --detach --quiet'
+    )
+    # Use the OS shell explicitly: a caller's zsh may reject an unmatched glob.
+    return f"/bin/sh -c {shlex.quote(script)}"
+
+
+def _windows_native_terminal_hook_command(lifecycle: str) -> str:
+    """Use PowerShell's literal paths so installed directory names stay data."""
+    return (
+        "$ErrorActionPreference = 'Stop'; "
+        "$root = $env:PLUGIN_ROOT; if ([string]::IsNullOrEmpty($root)) { exit 0 }; "
+        "$runtime = Join-Path $root 'runtime/promptless-host-runtime.exe'; "
+        "if (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) { "
+        "$runtime = $null; $parent = Split-Path -Path $root -Parent; "
+        "if (Test-Path -LiteralPath $parent -PathType Container) { "
+        "foreach ($sibling in (Get-ChildItem -LiteralPath $parent -Directory -ErrorAction Stop | Sort-Object Name)) { "
+        "$candidate = Join-Path $sibling.FullName 'runtime/promptless-host-runtime.exe'; "
+        "if (Test-Path -LiteralPath $candidate -PathType Leaf) { $runtime = $candidate } "
+        "} } }; if (-not $runtime) { exit 0 }; "
+        f"& $runtime collect --host codex --lifecycle {lifecycle} --detach --quiet; exit $LASTEXITCODE"
+    )
 
 
 def _host_runtime_lifecycle_arg(event_name: str) -> str:

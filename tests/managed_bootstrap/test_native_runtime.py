@@ -121,7 +121,7 @@ def test_build_copies_validated_native_files_and_emits_host_launchers(
                 if target == "claude":
                     assert hook["command"] == "${CLAUDE_PLUGIN_ROOT}/runtime/promptless-host-runtime"
                     assert hook["args"] == args
-                else:
+                elif event == "SessionStart":
                     assert hook["command"] == '"${PLUGIN_ROOT}/runtime/promptless-host-runtime" ' + " ".join(args)
                     assert hook[
                         "commandWindows"

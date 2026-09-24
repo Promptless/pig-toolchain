@@ -734,8 +734,13 @@ Codex has separate POSIX and Windows PowerShell commands. Cursor uses a bundled
 qualification reproduces Cursor 3.21.9's UTF-8 input pipeline and automatic
 PowerShell call operator for quoted hook paths; older host versions need qualification.
 The Unix launcher uses `/bin/sh` and `/usr/bin/uname` to choose its bundled binary.
-A missing or incomplete installed runtime requires refreshing or reinstalling
-the plugin; launchers do not search other cached plugin versions.
+Codex terminal hooks can use a sibling cached version if an update removes the
+active session's runtime; they exit quietly if no runtime remains. Claude's
+exec-form hooks do not search sibling versions. If an update removes the version
+directory used by an active Claude session, reload the plugin or restart Claude
+before its hooks can run again. This preserves native Windows support without
+requiring Git Bash. A missing or incomplete runtime otherwise requires refreshing
+or reinstalling the plugin.
 
 All three hosts launch detached supervisors with closed background output pipes.
 The foreground accepts bounded hook metadata and does no network or trace

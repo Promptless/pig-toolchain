@@ -683,7 +683,7 @@ def test_detached_launcher_records_collector_outcome(
     assert set(diagnostic) == {"status", "observed_at"}
 
 
-@pytest.mark.parametrize("preamble", [b"", b"\xef\xbb\xbf"])
+@pytest.mark.parametrize("preamble", [b"\xef\xbb\xbf" * count for count in range(4)])
 def test_cursor_launcher_preserves_powershell_utf8_input(monkeypatch: pytest.MonkeyPatch, preamble: bytes) -> None:
     from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import cli
 
@@ -698,3 +698,21 @@ def test_cursor_launcher_preserves_powershell_utf8_input(monkeypatch: pytest.Mon
     monkeypatch.setattr(cli, "_spawn_detached", spawn)
     assert cli._launch_cursor_hook("stop") == 0
     assert captured == [context]
+
+
+@pytest.mark.parametrize("prefix", [b"\xef\xbb", b"\xef\xbb\xbf \xef\xbb\xbf", b"\xef\xbb\xbfgarbage"])
+def test_hook_input_rejects_partial_or_nonleading_preambles(prefix: bytes) -> None:
+    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import traces
+    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
+        BootstrapError,
+    )
+
+    with pytest.raises(BootstrapError):
+        traces._read_hook_context(prefix + b'{"conversation_id":"native-cursor"}')
+
+
+def test_hook_input_preserves_bom_character_in_json_string() -> None:
+    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import traces
+
+    context = {"conversation_id": "native-cursor", "generation_id": "\ufeffinside"}
+    assert traces._read_hook_context(json.dumps(context, ensure_ascii=False).encode()) == context
