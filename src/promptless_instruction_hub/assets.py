@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from pathlib import Path
+import re
 
 from promptless_instruction_hub.errors import InstructionHubError
 from promptless_instruction_hub.fs import (
@@ -27,8 +28,11 @@ from promptless_instruction_hub.models import (
 
 ASSETS_DIR = Path("assets")
 METADATA_FILE = "asset.yaml"
-SECRET_KEY_FRAGMENTS = ("token", "secret", "password", "api_key", "apikey", "private_key")
+SECRET_KEY_WORDS = {"token", "tokens", "secret", "secrets", "password", "passwords", "apikey"}
 SECRET_KEY_NAMES = {"authorization", "cookie", "proxy_authorization", "x_api_key"}
+ENV_REFERENCE = re.compile(
+    r"(?:\$\{(?:[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_-]*)\}|env:[A-Za-z_][A-Za-z0-9_]*)"
+)
 SUPPORTED_FILE_SUFFIXES = (".md", ".mdc", ".yaml", ".yml", ".json")
 SIDECAR_METADATA_SUFFIX = ".asset.yaml"
 DEFAULT_TITLES = {
@@ -269,12 +273,18 @@ def _validate_secret_values(path: Path, value: object, key_path: tuple[str, ...]
         return
     if not isinstance(value, str):
         return
-    normalized_key_path = tuple(_normalize_key_fragment(key) for key in key_path)
-    joined_key = ".".join(normalized_key_path)
-    if not _requires_env_placeholder(normalized_key_path, joined_key):
+    fields = [_normalize_key_fragment(key) for key in key_path if not key.isdecimal()]
+    normalized_field = fields[-1] if fields else ""
+    if normalized_field in {"value", "default"} and len(fields) > 1:
+        normalized_field = fields[-2]
+    if not _requires_env_placeholder(normalized_field):
         return
     if _is_env_placeholder(value):
         return
+    if normalized_field in {"authorization", "proxy_authorization"}:
+        scheme, separator, credential = value.partition(" ")
+        if separator and scheme.lower() in {"bearer", "basic"} and _is_env_placeholder(credential):
+            return
     _raise_literal_secret(path, key_path)
 
 
@@ -303,11 +313,11 @@ def _is_secret_arg_flag(value: str) -> bool:
     if not value.startswith("-"):
         return False
     normalized = _normalize_key_fragment(value.lstrip("-"))
-    return _requires_env_placeholder((normalized,), normalized)
+    return _requires_env_placeholder(normalized)
 
 
 def _is_env_placeholder(value: str) -> bool:
-    return (value.startswith("${") and value.endswith("}")) or value.startswith("env:")
+    return ENV_REFERENCE.fullmatch(value) is not None
 
 
 def _raise_literal_secret(path: Path, key_path: tuple[str, ...]) -> None:
@@ -316,13 +326,17 @@ def _raise_literal_secret(path: Path, key_path: tuple[str, ...]) -> None:
 
 
 def _normalize_key_fragment(key: str) -> str:
-    return key.lower().replace("-", "_")
+    key = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", key)
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key).lower().replace("-", "_")
 
 
-def _requires_env_placeholder(key_path: tuple[str, ...], joined_key: str) -> bool:
-    if any(key in SECRET_KEY_NAMES for key in key_path):
-        return True
-    return any(fragment in joined_key for fragment in SECRET_KEY_FRAGMENTS)
+def _requires_env_placeholder(field: str) -> bool:
+    words = field.split("_")
+    return (
+        field in SECRET_KEY_NAMES
+        or bool(SECRET_KEY_WORDS.intersection(words))
+        or re.search(r"(?:^|_)(?:api|private)_key(?:_|$)", field) is not None
+    )
 
 
 def _read_structured_file(path: Path) -> object:
