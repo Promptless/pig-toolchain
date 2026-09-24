@@ -316,15 +316,16 @@ bump collides, choose a higher version with
 
 This is a breaking source configuration and installed plugin identity change.
 Coordinate the toolchain upgrade with the hub migration. Validation rejects
-legacy fields and the old `packages/` directory with migration guidance.
+legacy fields and recognized plugin definitions in `packages/*.yaml` with
+migration guidance. Unrelated application packages may remain in `packages/`.
 
 1. Replace root `plugin_id` and `plugin_name` with `marketplace.id` and
    `marketplace.name`. To keep an existing marketplace registration, set the new
    ID to its previous generated name: the old `plugin_id` plus `-marketplace`.
    The compiler now uses that value verbatim.
-2. Move `packages/` to `plugins/` and rename `stable_packages` to
-   `stable_plugins` in `hub.yaml`. Keep each definition's `id`, `name`, and
-   `includes`. Update custom CI path filters and scripts that reference the old
+2. Move the legacy plugin definitions from `packages/*.yaml` to `plugins/` and
+   rename `stable_packages` to `stable_plugins` in `hub.yaml`. Keep each
+   definition's `id`, `name`, and `includes`. Update custom CI path filters and scripts that reference the old
    directory or `pig init --plugin-id` / `--plugin-name` flags.
 3. Rename `plugin_version` to `version` in `hub.yaml` and use `--version`
    instead of `--plugin-version` in scripts. Version 2 release manifests use

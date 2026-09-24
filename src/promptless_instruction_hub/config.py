@@ -46,13 +46,8 @@ def load_hub_config(hub_root: Path) -> HubConfig:
 def load_plugins(hub_root: Path) -> dict[str, HubPluginDefinition]:
     """Load plugin definitions from `plugins/*.yaml`."""
 
+    _reject_legacy_plugin_definitions(hub_root)
     plugins: dict[str, HubPluginDefinition] = {}
-    if (hub_root / "packages").exists():
-        msg = (
-            f"{hub_root / 'packages'}: legacy plugin directory; move packages/*.yaml to plugins/ and remove packages/. "
-            f"See {MIGRATION_GUIDE_URL} for installation changes."
-        )
-        raise InstructionHubError(msg)
     plugins_dir = hub_root / PLUGIN_DIR
     if not plugins_dir.exists():
         return plugins
@@ -69,6 +64,27 @@ def load_plugins(hub_root: Path) -> dict[str, HubPluginDefinition]:
             raise InstructionHubError(msg)
         plugins[plugin_definition.id] = plugin_definition
     return plugins
+
+
+def _reject_legacy_plugin_definitions(hub_root: Path) -> None:
+    """Recognize legacy definitions while allowing unrelated monorepo packages."""
+
+    packages_dir = hub_root / "packages"
+    if packages_dir.is_symlink() or not packages_dir.is_dir():
+        return
+    for package_path in sorted(packages_dir.glob("*.yaml")):
+        if package_path.is_symlink() or not package_path.is_file():
+            continue
+        try:
+            PluginDefinition.model_validate(read_yaml_mapping(package_path))
+        except (InstructionHubError, OSError, ValueError):
+            # These files may belong to the customer's application, not the hub.
+            continue
+        msg = (
+            f"{package_path}: legacy plugin directory; move this definition to plugins/{package_path.name}. "
+            f"See {MIGRATION_GUIDE_URL} for installation changes."
+        )
+        raise InstructionHubError(msg)
 
 
 def write_hub_version(hub_root: Path, version: str) -> None:
