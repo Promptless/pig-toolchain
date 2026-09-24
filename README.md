@@ -79,9 +79,40 @@ pointers on the source branch for the configured Claude, Codex, and Cursor targe
 The caller above runs publication on pushes to `main` or manual runs on `main`,
 and its concurrency group prevents overlapping publish runs.
 
-Publishing uses the caller repository's automatic `GITHUB_TOKEN`; no additional
-secret is required. Grant `contents: write` as shown and ensure repository rules
-allow that token to push to both the source and release branches.
+Publishing defaults to the caller repository's automatic `GITHUB_TOKEN`. Grant
+`contents: write` as shown and ensure repository rules allow that identity to
+update both the source and release branches.
+
+If your branch rules require a dedicated publisher, pass its token through the
+reusable workflow's optional `publisher-token` secret:
+
+```yaml
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    uses: Promptless/pig-toolchain/.github/workflows/publish.yml@main
+    secrets:
+      publisher-token: ${{ secrets.INSTRUCTION_HUB_PUBLISHER_TOKEN }}
+```
+
+For example, use a fine-grained personal access token restricted to this
+repository with Contents read/write permission. A currently valid GitHub App
+installation token also works; mint short-lived App tokens at run time rather
+than storing them as permanent repository secrets. When minting one in the same
+job as the composite action, pass it through the action's `github-token` input.
+The selected token authenticates publication fetches and the atomic push; the
+initial caller checkout continues to use the automatic token.
+
+The publisher identity must be authorized by the rules for **both** branches.
+`contents: write` alone does not bypass required pull requests or other branch
+rules. This publication mode writes source version, lock, and marketplace
+pointer updates directly; repositories requiring every such update through a
+pull request need an explicitly authorized publishing identity before using it.
+If either branch update is rejected, the atomic push leaves both unchanged.
+After a connection failure, check the remote refs before retrying, since the
+server may already have accepted both updates. Unlike automatic-token pushes,
+custom-token pushes can trigger another workflow run; unchanged publication is
+a no-op.
 
 All workflow inputs are optional. Set them under the calling job's `with`:
 

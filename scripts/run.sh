@@ -228,6 +228,10 @@ push_origin_refs() {
     "--force-with-lease=refs/heads/$release_branch:$release_base" \
     origin "$@" || status=$?
   restore_push_credentials
+  if [[ "$status" -ne 0 ]]; then
+    echo "Atomic publication failed; verify publisher write permission and branch rules for source '$source_branch' and release '$release_branch'." >&2
+    echo "If the connection failed, check remote refs before retrying; the server may have accepted the push." >&2
+  fi
   return "$status"
 }
 

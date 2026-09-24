@@ -686,6 +686,9 @@ def test_action_publish_ref_rejection_keeps_both_remote_branches(
 
     assert result.returncode != 0
     assert "atomic" in result.stderr
+    assert "Atomic publication failed" in result.stderr
+    assert "publisher write permission and branch rules for source 'main' and release 'release/stable'" in result.stderr
+    assert "check remote refs before retrying" in result.stderr
     assert _git_output(remote, "show-ref", "--heads") == before
     assert _git_output(repo, "rev-parse", "HEAD") == local_before
     assert _git_output(repo, "status", "--short") == ""
