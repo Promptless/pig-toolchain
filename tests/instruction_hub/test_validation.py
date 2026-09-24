@@ -372,6 +372,11 @@ def test_validate_rejects_literal_or_malformed_authorization_values(tmp_path: Pa
         "MCP_API_KEY",
         "AWSSecretAccessKey",
         "PGPASSWORD",
+        "SYSTEM_ACCESSTOKEN",
+        "CLIENTSECRET",
+        "REFRESHTOKEN",
+        "PRIVATEKEY",
+        "AWS_SECRETACCESSKEY",
     ],
 )
 def test_validate_still_rejects_literal_credential_fields(tmp_path: Path, field: str) -> None:
@@ -386,11 +391,14 @@ def test_validate_still_rejects_literal_credential_fields(tmp_path: Path, field:
 
 
 @pytest.mark.parametrize("value", ["${DATABASE_PASSWORD}", "${env:DATABASE_PASSWORD}"])
-def test_validate_accepts_postgres_password_environment_references(tmp_path: Path, value: str) -> None:
+@pytest.mark.parametrize(
+    "field", ["PGPASSWORD", "SYSTEM_ACCESSTOKEN", "CLIENTSECRET", "REFRESHTOKEN", "PRIVATEKEY", "AWS_SECRETACCESSKEY"]
+)
+def test_validate_accepts_credential_environment_references(tmp_path: Path, value: str, field: str) -> None:
     hub_root = tmp_path / "hub"
     init_hub(hub_root, org="Acme")
     (hub_root / "assets/mcps/postgres.json").write_text(
-        json.dumps({"mcpServers": {"postgres": {"command": "postgres-mcp", "env": {"PGPASSWORD": value}}}})
+        json.dumps({"mcpServers": {"postgres": {"command": "postgres-mcp", "env": {field: value}}}})
     )
 
     validate_hub(hub_root)
@@ -409,7 +417,9 @@ def test_validate_still_rejects_wrapped_literal_credentials(tmp_path: Path, payl
         validate_hub(hub_root)
 
 
-@pytest.mark.parametrize("field", ["api_keys", "private_keys", "apikeys", "apiKeys", "privateKeys", "API_KEYS"])
+@pytest.mark.parametrize(
+    "field", ["api_keys", "private_keys", "apikeys", "apiKeys", "privateKeys", "API_KEYS", "PRIVATEKEYS"]
+)
 @pytest.mark.parametrize("shape", ["list", "value", "default", "wrapped-items"])
 @pytest.mark.parametrize("credential", ["literal-secret", "${MCP_SECRET}", "${env:MCP_SECRET}"])
 def test_validate_checks_plural_credential_collections(tmp_path: Path, field: str, shape: str, credential: str) -> None:
