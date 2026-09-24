@@ -1,0 +1,15 @@
+#!/bin/sh
+# Only OS-provided utilities are used; no customer Python or Node installation.
+runtime_dir=${0%/*}
+case "$(/usr/bin/uname -s)/$(/usr/bin/uname -m)" in
+  Darwin/arm64) platform=darwin-arm64 ;;
+  Darwin/x86_64) platform=darwin-x86_64 ;;
+  Linux/x86_64) platform=linux-x86_64 ;;
+  *) printf '%s\n' 'Promptless runtime does not support this operating system/architecture.' >&2; exit 1 ;;
+esac
+runtime="$runtime_dir/native/$platform/runtime"
+if [ ! -x "$runtime" ]; then
+  printf '%s\n' 'Promptless native runtime is missing for this platform. Reinstall the plugin with a complete runtime release.' >&2
+  exit 1
+fi
+exec "$runtime" "$@"

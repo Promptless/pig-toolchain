@@ -263,7 +263,12 @@ def _read_hook_context(body: bytes | None = None) -> dict[str, JsonValue]:
         body = _read_hook_input()
     if body == b"":
         return {}
-    return _decode_json_object(body, "hook stdin")
+    # Windows PowerShell can prepend UTF-8 preambles from both pipe writers.
+    # Accept complete leading encoding markers only at the host-input boundary.
+    offset = 0
+    while body.startswith(b"\xef\xbb\xbf", offset):
+        offset += 3
+    return _decode_json_object(body[offset:], "hook stdin")
 
 
 def _hook_trace_context(context: dict[str, JsonValue]) -> HookTraceContext:

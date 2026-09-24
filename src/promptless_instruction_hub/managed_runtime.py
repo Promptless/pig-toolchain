@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import shlex
 import shutil
 from dataclasses import dataclass
@@ -15,6 +13,11 @@ from promptless_instruction_hub.config import MANAGED_RUNTIME_MANIFEST_PATH
 from promptless_instruction_hub.errors import InstructionHubError
 from promptless_instruction_hub.fs import JsonValue, read_json_mapping, write_json
 from promptless_instruction_hub.models import PIG_PLUGIN_ID, Harness, HubConfig, PluginDefinition
+from promptless_instruction_hub.native_runtime import resolve_native_bundle
+from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.native_bundle import (
+    NativeManifest,
+    validate_bundle,
+)
 from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.runtime_config import (
     RUNTIME_CONFIG_NAME,
     RUNTIME_CONFIG_SCHEMA_VERSION,
@@ -41,35 +44,6 @@ HOST_RUNTIME_CHANNEL = "stable"
 HOST_RUNTIME_VERSION = "0.3.0"
 MANAGED_RUNTIME_MANIFEST = MANAGED_RUNTIME_MANIFEST_PATH
 SUPPORTED_HOST_RUNTIME_TARGETS: tuple[Harness, ...] = ("claude", "codex", "cursor")
-MISSING_RUNTIME_ROOT_MESSAGE = (
-    "Promptless Instruction Hub hook could not find its plugin root. "
-    "Update the host CLI or reinstall the Promptless plugin."
-)
-MISSING_RUNTIME_FILE_MESSAGE = (
-    "Promptless Instruction Hub hook could not find its managed runtime. Reinstall the Promptless plugin."
-)
-UNREADABLE_RUNTIME_FILE_MESSAGE = (
-    "Promptless Instruction Hub hook found its managed runtime, but it is not readable. "
-    "Reinstall the Promptless plugin."
-)
-MISSING_PYTHON_MESSAGE = (
-    "Promptless Instruction Hub hook could not find Python 3.9 or newer. "
-    "Install Python 3.9+ or reinstall the Promptless plugin."
-)
-UNSUPPORTED_PYTHON_MESSAGE = (
-    "Promptless Instruction Hub hook found Python, but none are Python 3.9 or newer. "
-    "Install Python 3.9+ or reinstall the Promptless plugin."
-)
-BROKEN_PYTHON_MESSAGE = (
-    "Promptless Instruction Hub hook could not start a usable Python 3.9 or newer interpreter. "
-    "Reinstall the Promptless plugin."
-)
-PYTHON_MIN_VERSION = (3, 9)
-PYTHON_VERSION_PROBE = f"import sys; raise SystemExit(0 if sys.version_info >= {PYTHON_MIN_VERSION!r} else 2)"
-
-_ASSET_ROOT = Path(__file__).parent / "managed_runtime_assets" / HOST_RUNTIME_ASSET_DIR
-_EXECUTABLE_SOURCE = _ASSET_ROOT / HOST_RUNTIME_EXECUTABLE
-_PACKAGE_SOURCE = _ASSET_ROOT / HOST_RUNTIME_PACKAGE
 
 
 @dataclass(frozen=True)
@@ -90,6 +64,8 @@ class ManagedRuntimeRecord:
     executable: str | None = None
     path: str | None = None
     hook: str | None = None
+    source_sha256: str | None = None
+    platforms: tuple[str, ...] = ()
 
     def to_manifest(self) -> dict[str, JsonValue]:
         """Return a deterministic JSON record for manifests and check-in context."""
@@ -112,10 +88,13 @@ class ManagedRuntimeRecord:
             ("executable", self.executable),
             ("path", self.path),
             ("hook", self.hook),
+            ("source_sha256", self.source_sha256),
         )
         for key, value in optional_fields:
             if value is not None:
                 data[key] = value
+        if self.platforms:
+            data["platforms"] = list(self.platforms)
         return data
 
 
@@ -130,7 +109,7 @@ def render_managed_runtimes(
     if not config.trace_ingestion.enabled or plugin.id != PIG_PLUGIN_ID or target not in SUPPORTED_HOST_RUNTIME_TARGETS:
         return ()
 
-    _copy_runtime_bundle(target_root)
+    native_manifest = _copy_runtime_bundle(target_root)
     _write_runtime_config(target_root, config)
     _write_host_runtime_hooks(target_root, target)
     record = ManagedRuntimeRecord(
@@ -144,10 +123,12 @@ def render_managed_runtimes(
         toolchain_version=_toolchain_version(),
         channel=HOST_RUNTIME_CHANNEL,
         version=HOST_RUNTIME_VERSION,
-        sha256=_runtime_bundle_sha256(_ASSET_ROOT),
+        sha256=str(native_manifest["bundle_sha256"]),
         executable=HOST_RUNTIME_EXECUTABLE,
         path=f"{HOST_RUNTIME_OUTPUT_DIR}/{HOST_RUNTIME_EXECUTABLE}",
         hook="hooks/hooks.json",
+        source_sha256=str(native_manifest["source_sha256"]),
+        platforms=tuple(str(item) for item in native_manifest["platforms"]),
     )
     _write_plugin_manifest(target_root, (record,))
     return (record,)
@@ -167,54 +148,18 @@ def _write_runtime_config(target_root: Path, config: HubConfig) -> None:
     write_json(target_root / RUNTIME_CONFIG_NAME, runtime_config)
 
 
-def _copy_runtime_bundle(target_root: Path) -> None:
+def _copy_runtime_bundle(target_root: Path) -> NativeManifest:
+    source = resolve_native_bundle()
+    manifest = validate_bundle(source, complete=False)
     runtime_root = target_root / HOST_RUNTIME_OUTPUT_DIR
-    runtime_root.mkdir(parents=True, exist_ok=True)
-
-    executable_destination = runtime_root / HOST_RUNTIME_EXECUTABLE
-    shutil.copy2(_EXECUTABLE_SOURCE, executable_destination)
-    executable_destination.chmod(0o755)
-    shutil.copy2(_ASSET_ROOT / "cursor-hook.cjs", runtime_root / "cursor-hook.cjs")
-
-    package_destination = runtime_root / HOST_RUNTIME_PACKAGE
-    if package_destination.exists():
-        shutil.rmtree(package_destination)
-    shutil.copytree(
-        _PACKAGE_SOURCE,
-        package_destination,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-    )
-
-
-def _runtime_bundle_sha256(bundle_root: Path) -> str:
-    digest = hashlib.sha256()
-    for path in _runtime_bundle_files(bundle_root):
-        relative_path = path.relative_to(bundle_root).as_posix()
-        digest.update(relative_path.encode())
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
-def _runtime_bundle_files(bundle_root: Path) -> tuple[Path, ...]:
-    package_root = bundle_root / HOST_RUNTIME_PACKAGE
-    package_files = (
-        path
-        for path in package_root.rglob("*")
-        if path.is_file() and "__pycache__" not in path.relative_to(bundle_root).parts and path.suffix != ".pyc"
-    )
-    return tuple(
-        sorted(
-            (bundle_root / HOST_RUNTIME_EXECUTABLE, bundle_root / "cursor-hook.cjs", *package_files),
-            key=lambda path: path.relative_to(bundle_root).as_posix(),
-        )
-    )
-
-
-HOST_RUNTIME_BUNDLE_RELATIVE_PATHS = tuple(
-    path.relative_to(_ASSET_ROOT).as_posix() for path in _runtime_bundle_files(_ASSET_ROOT)
-)
+    shutil.copytree(source, runtime_root, dirs_exist_ok=True)
+    # Keep Git from changing byte-hashed files on publication or checkout. The
+    # rule belongs outside the validated runtime inventory and only covers it.
+    attributes_path = target_root / ".gitattributes"
+    existing = attributes_path.read_bytes() if attributes_path.exists() else b""
+    separator = b"\n" if existing and not existing.endswith(b"\n") else b""
+    attributes_path.write_bytes(existing + separator + f"/{HOST_RUNTIME_OUTPUT_DIR}/** -text\n".encode())
+    return manifest
 
 
 def _write_host_runtime_hooks(target_root: Path, target: Harness) -> None:
@@ -237,8 +182,9 @@ def _write_host_runtime_hooks(target_root: Path, target: Harness) -> None:
                 raise InstructionHubError(f"{hook_path} field hooks.{event} must be an array")
             entries.append(
                 {
-                    "command": f'node "${{CURSOR_PLUGIN_ROOT}}/runtime/cursor-hook.cjs" {lifecycle}',
-                    "timeout": 0.25,
+                    "command": f'"${{CURSOR_PLUGIN_ROOT}}/runtime/cursor-hook.cmd" {lifecycle}',
+                    # Frozen startup plus detached spawn; no network/SQLite work here.
+                    "timeout": 30 if lifecycle == "session_start" else 3,
                 }
             )
         write_json(hook_path, hook_config)
@@ -279,8 +225,6 @@ def _host_runtime_hook_entry(target: Harness, event_name: str) -> dict[str, Json
     # the user to trust/review plugin hooks before running these commands.
     # https://developers.openai.com/codex/plugins/build
     # https://docs.anthropic.com/en/docs/claude-code/hooks
-    # The Python entrypoint is dogfood-only. Customer-grade releases should invoke a
-    # Promptless-built static native binary so customer machines do not need Python or uv.
     # SessionStart launches detached enrollment, config/check-in reconciliation, and JSONL
     # collection. Terminal lifecycle hooks only launch detached native JSONL uploads.
     hook_entry: dict[str, JsonValue] = {
@@ -308,44 +252,70 @@ def _host_runtime_hook_timeout(event_name: str) -> int:
     return HOST_RUNTIME_TERMINAL_HOOK_TIMEOUT_SECONDS
 
 
-def _host_runtime_start_hook_command(target: Harness, *, lifecycle: str) -> dict[str, JsonValue]:
+def _native_hook_command(target: Harness, lifecycle: str, *, start: bool) -> dict[str, JsonValue]:
+    arguments = (
+        ["session-start", "--host", target, "--detach"]
+        if start
+        else ["collect", "--host", target, "--lifecycle", lifecycle, "--detach", "--quiet"]
+    )
     if target == "claude":
-        return _claude_host_runtime_hook_command(
-            lifecycle=lifecycle,
-            run_ensure=True,
-            quiet_failure=False,
-            allow_sibling_runtime=False,
-        )
+        # Claude exec form uses Node/Bun executable resolution on Windows, which
+        # appends .exe for this extensionless path. The sibling Unix script has a shebang.
+        return {"command": "${CLAUDE_PLUGIN_ROOT}/runtime/promptless-host-runtime", "args": arguments}
+    command_args = " ".join(arguments)
     return {
-        "command": _posix_host_runtime_hook_command(
-            root_expr="${PLUGIN_ROOT:-}",
-            host="codex",
-            lifecycle=lifecycle,
-            run_ensure=True,
-            quiet_failure=False,
-            allow_sibling_runtime=False,
-        ),
+        "command": f'"${{PLUGIN_ROOT}}/runtime/promptless-host-runtime" {command_args}',
+        "commandWindows": f'& "${{PLUGIN_ROOT}}/runtime/promptless-host-runtime.exe" {command_args}',
     }
+
+
+def _host_runtime_start_hook_command(target: Harness, *, lifecycle: str) -> dict[str, JsonValue]:
+    return _native_hook_command(target, lifecycle, start=True)
 
 
 def _host_runtime_terminal_hook_command(target: Harness, *, lifecycle: str) -> dict[str, JsonValue]:
     if target == "claude":
-        return _claude_host_runtime_hook_command(
-            lifecycle=lifecycle,
-            run_ensure=False,
-            quiet_failure=True,
-            allow_sibling_runtime=True,
-        )
+        # Claude has no per-platform command override. Keep exec form so Windows
+        # does not acquire a Git Bash dependency solely for stale-root recovery.
+        return _native_hook_command(target, lifecycle, start=False)
     return {
-        "command": _posix_host_runtime_hook_command(
-            root_expr="${PLUGIN_ROOT:-}",
-            host="codex",
-            lifecycle=lifecycle,
-            run_ensure=False,
-            quiet_failure=True,
-            allow_sibling_runtime=True,
-        ),
+        "command": _posix_native_terminal_hook_command(lifecycle),
+        "commandWindows": _windows_native_terminal_hook_command(lifecycle),
     }
+
+
+def _posix_native_terminal_hook_command(lifecycle: str) -> str:
+    """Run even after an upgrade deletes the directory cached by a live session."""
+    script = (
+        'root=${PLUGIN_ROOT:-}; [ -n "$root" ] || exit 0; '
+        'runtime="$root/runtime/promptless-host-runtime"; '
+        'if [ ! -f "$runtime" ] || [ ! -x "$runtime" ]; then '
+        "runtime=; parent=${root%/*}; "
+        'for candidate in "$parent"/*/runtime/promptless-host-runtime; do '
+        'if [ -f "$candidate" ] && [ -x "$candidate" ]; then runtime=$candidate; fi; '
+        "done; fi; "
+        '[ -n "$runtime" ] || exit 0; '
+        f'exec "$runtime" collect --host codex --lifecycle {lifecycle} --detach --quiet'
+    )
+    # Use the OS shell explicitly: a caller's zsh may reject an unmatched glob.
+    return f"/bin/sh -c {shlex.quote(script)}"
+
+
+def _windows_native_terminal_hook_command(lifecycle: str) -> str:
+    """Use PowerShell's literal paths so installed directory names stay data."""
+    return (
+        "$ErrorActionPreference = 'Stop'; "
+        "$root = $env:PLUGIN_ROOT; if ([string]::IsNullOrEmpty($root)) { exit 0 }; "
+        "$runtime = Join-Path $root 'runtime/promptless-host-runtime.exe'; "
+        "if (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) { "
+        "$runtime = $null; $parent = Split-Path -Path $root -Parent; "
+        "if (Test-Path -LiteralPath $parent -PathType Container) { "
+        "foreach ($sibling in (Get-ChildItem -LiteralPath $parent -Directory -ErrorAction Stop | Sort-Object Name)) { "
+        "$candidate = Join-Path $sibling.FullName 'runtime/promptless-host-runtime.exe'; "
+        "if (Test-Path -LiteralPath $candidate -PathType Leaf) { $runtime = $candidate } "
+        "} } }; if (-not $runtime) { exit 0 }; "
+        f"& $runtime collect --host codex --lifecycle {lifecycle} --detach --quiet; exit $LASTEXITCODE"
+    )
 
 
 def _host_runtime_lifecycle_arg(event_name: str) -> str:
@@ -361,252 +331,6 @@ def _host_runtime_lifecycle_arg(event_name: str) -> str:
         case _:
             msg = f"unsupported host runtime hook event: {event_name}"
             raise InstructionHubError(msg)
-
-
-def _system_message_json(message: str) -> str:
-    return json.dumps({"systemMessage": message}, separators=(",", ":"))
-
-
-def _hook_json_system_message(message: str) -> str:
-    return _system_message_json(message).replace('"', '\\"')
-
-
-def _claude_host_runtime_hook_command(
-    *,
-    lifecycle: str,
-    run_ensure: bool,
-    quiet_failure: bool,
-    allow_sibling_runtime: bool,
-) -> dict[str, JsonValue]:
-    return {
-        "command": "node",
-        "args": [
-            "-e",
-            _node_host_runtime_hook_script(
-                root_envs=("CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"),
-                host="claude",
-                lifecycle=lifecycle,
-                run_ensure=run_ensure,
-                quiet_failure=quiet_failure,
-                allow_sibling_runtime=allow_sibling_runtime,
-            ),
-            "${CLAUDE_PLUGIN_ROOT}",
-        ],
-    }
-
-
-def _node_host_runtime_hook_script(
-    *,
-    root_envs: tuple[str, ...],
-    host: Harness,
-    lifecycle: str,
-    run_ensure: bool,
-    quiet_failure: bool,
-    allow_sibling_runtime: bool,
-) -> str:
-    root_env_names = json.dumps(list(root_envs), separators=(",", ":"))
-    bundle_relative_paths = json.dumps(HOST_RUNTIME_BUNDLE_RELATIVE_PATHS, separators=(",", ":"))
-    missing_root = _system_message_json(MISSING_RUNTIME_ROOT_MESSAGE)
-    missing_file = _system_message_json(MISSING_RUNTIME_FILE_MESSAGE)
-    unreadable_file = _system_message_json(UNREADABLE_RUNTIME_FILE_MESSAGE)
-    missing_python = _system_message_json(MISSING_PYTHON_MESSAGE)
-    unsupported_python = _system_message_json(UNSUPPORTED_PYTHON_MESSAGE)
-    broken_python = _system_message_json(BROKEN_PYTHON_MESSAGE)
-    runtime_args = ["runtime"]
-    if run_ensure:
-        runtime_args.extend(("'session-start'", "'--host'", repr(host), "'--detach'"))
-    else:
-        runtime_args.extend(("'collect'", "'--host'", repr(host), "'--lifecycle'", repr(lifecycle)))
-        runtime_args.extend(("'--detach'", "'--quiet'"))
-    return (
-        "const fs = require('fs');\n"
-        "const path = require('path');\n"
-        "const { spawnSync } = require('child_process');\n"
-        f"const rootEnvNames = {root_env_names};\n"
-        f"const bundleRelativePaths = {bundle_relative_paths};\n"
-        f"const emitDiagnostics = {json.dumps(not quiet_failure)};\n"
-        f"const allowSiblingRuntime = {json.dumps(allow_sibling_runtime)};\n"
-        "function finishWithDiagnostic(payload) {\n"
-        "  if (emitDiagnostics) console.log(payload);\n"
-        "  process.exit(0);\n"
-        "}\n"
-        "function emitLaunchFailure(host, error) {\n"
-        "  const errorCode = typeof error.code === 'string' ? error.code : 'unknown';\n"
-        "  console.error(JSON.stringify({ status: 'error', reason: 'runtime_launch_failed', host, error_code: errorCode }));\n"
-        "}\n"
-        "function launchRuntime(command, args, stdio, host) {\n"
-        "  const launcher = spawnSync(command, args, { stdio, env: process.env });\n"
-        "  if (launcher.error) { emitLaunchFailure(host, launcher.error); return false; }\n"
-        "  return launcher.status === 0;\n"
-        "}\n"
-        "function runtimeState(candidate) {\n"
-        "  const bundleRoot = path.dirname(candidate);\n"
-        "  const requiredFiles = bundleRelativePaths.map((relativePath) => path.join(bundleRoot, ...relativePath.split('/')));\n"
-        "  for (const requiredFile of requiredFiles) {\n"
-        "    let stat;\n"
-        "    try { stat = fs.statSync(requiredFile); } catch (error) { return 'missing'; }\n"
-        "    if (!stat.isFile()) return 'missing';\n"
-        "  }\n"
-        "  for (const requiredFile of requiredFiles) {\n"
-        "    try { fs.accessSync(requiredFile, fs.constants.R_OK); } catch (error) { return 'unreadable'; }\n"
-        "  }\n"
-        "  return 'ready';\n"
-        "}\n"
-        "function siblingRuntime(rootPath) {\n"
-        "  const parent = path.dirname(rootPath);\n"
-        "  let entries;\n"
-        "  try { entries = fs.readdirSync(parent, { withFileTypes: true }); } catch (error) { return ''; }\n"
-        "  entries.sort((left, right) => left.name.localeCompare(right.name));\n"
-        "  let selected = '';\n"
-        "  for (const entry of entries) {\n"
-        "    if (!entry.isDirectory()) continue;\n"
-        f"    const candidate = path.join(parent, entry.name, {HOST_RUNTIME_OUTPUT_DIR!r}, {HOST_RUNTIME_EXECUTABLE!r});\n"
-        "    if (runtimeState(candidate) === 'ready') selected = candidate;\n"
-        "  }\n"
-        "  return selected;\n"
-        "}\n"
-        "let root = process.argv.slice(1).find((value) => value && !value.startsWith('${')) || '';\n"
-        "for (const name of rootEnvNames) {\n  if (root) break;\n  root = process.env[name] || '';\n}\n"
-        f"if (!root) finishWithDiagnostic({missing_root!r});\n"
-        f"let runtime = path.join(root, {HOST_RUNTIME_OUTPUT_DIR!r}, {HOST_RUNTIME_EXECUTABLE!r});\n"
-        "let runtimeStatus = runtimeState(runtime);\n"
-        "if (runtimeStatus !== 'ready' && allowSiblingRuntime) {\n"
-        "  const fallbackRuntime = siblingRuntime(root);\n"
-        "  if (fallbackRuntime) {\n"
-        "    runtime = fallbackRuntime;\n"
-        "    runtimeStatus = 'ready';\n"
-        "  }\n"
-        "}\n"
-        f"if (runtimeStatus === 'missing') finishWithDiagnostic({missing_file!r});\n"
-        f"if (runtimeStatus === 'unreadable') finishWithDiagnostic({unreadable_file!r});\n"
-        f"const pythonProbe = {PYTHON_VERSION_PROBE!r};\n"
-        f"const runtimeArgs = [{', '.join(runtime_args)}];\n"
-        "const candidates = [\n"
-        "  { command: 'python3', probeArgs: ['-c', pythonProbe], runPrefix: [] },\n"
-        "  { command: 'python', probeArgs: ['-c', pythonProbe], runPrefix: [] },\n"
-        "  { command: 'py', probeArgs: ['-3', '-c', pythonProbe], runPrefix: ['-3'] },\n"
-        "];\n"
-        "let sawUnsupportedPython = false;\n"
-        "let sawBrokenPython = false;\n"
-        "let runtimeStarted = false;\n"
-        "for (const candidate of candidates) {\n"
-        "  const probe = spawnSync(candidate.command, candidate.probeArgs, { stdio: 'ignore' });\n"
-        "  if (probe.error) {\n"
-        "    if (probe.error.code !== 'ENOENT') sawBrokenPython = true;\n"
-        "    continue;\n"
-        "  }\n"
-        "  if (probe.status !== 0) {\n"
-        "    if (probe.status === 2) sawUnsupportedPython = true;\n"
-        "    else sawBrokenPython = true;\n"
-        "    continue;\n"
-        "  }\n"
-        f"  runtimeStarted = launchRuntime(candidate.command, [...candidate.runPrefix, ...runtimeArgs], ['inherit', 'inherit', 'inherit'], {host!r});\n"
-        "  if (!runtimeStarted && emitDiagnostics) process.exit(1);\n"
-        "  break;\n"
-        "}\n"
-        f"if (!runtimeStarted && sawUnsupportedPython) finishWithDiagnostic({unsupported_python!r});\n"
-        f"else if (!runtimeStarted && sawBrokenPython) finishWithDiagnostic({broken_python!r});\n"
-        f"else if (!runtimeStarted) finishWithDiagnostic({missing_python!r});\n"
-    )
-
-
-def _posix_host_runtime_hook_command(
-    *,
-    root_expr: str,
-    host: Harness,
-    lifecycle: str,
-    run_ensure: bool,
-    quiet_failure: bool,
-    allow_sibling_runtime: bool,
-) -> str:
-    bundle_relative_paths = " ".join(shlex.quote(path) for path in HOST_RUNTIME_BUNDLE_RELATIVE_PATHS)
-    runtime_state_function = (
-        "runtime_state() { "
-        "runtime_candidate=$1; runtime_bundle_dir=${runtime_candidate%/*}; "
-        f"for relative_path in {bundle_relative_paths}; do "
-        'required_path="$runtime_bundle_dir/$relative_path"; '
-        'if [ ! -f "$required_path" ]; then return 1; fi; '
-        "done; "
-        f"for relative_path in {bundle_relative_paths}; do "
-        'required_path="$runtime_bundle_dir/$relative_path"; '
-        'if [ ! -r "$required_path" ]; then return 2; fi; '
-        "done; "
-        "return 0; "
-        "}; "
-    )
-    missing_root_action = "exit 0"
-    if not quiet_failure:
-        missing_root_action = f"{_posix_emit_system_message(MISSING_RUNTIME_ROOT_MESSAGE)}; exit 0"
-    if allow_sibling_runtime:
-        runtime_check = (
-            f'runtime="$root/{HOST_RUNTIME_OUTPUT_DIR}/{HOST_RUNTIME_EXECUTABLE}"; '
-            'runtime_state "$runtime"; runtime_status=$?; '
-            'if [ "$runtime_status" -ne 0 ]; then '
-            "runtime=; root_parent=${root%/*}; "
-            f'for candidate in "$root_parent"/*/{HOST_RUNTIME_OUTPUT_DIR}/{HOST_RUNTIME_EXECUTABLE}; do '
-            'if runtime_state "$candidate"; then runtime="$candidate"; fi; '
-            "done; "
-            "fi; "
-            'if [ -z "$runtime" ]; then exit 0; fi; '
-        )
-    else:
-        runtime_check = (
-            f'runtime="$root/{HOST_RUNTIME_OUTPUT_DIR}/{HOST_RUNTIME_EXECUTABLE}"; '
-            'runtime_state "$runtime"; runtime_status=$?; '
-            f'if [ "$runtime_status" -eq 1 ]; then {_posix_emit_system_message(MISSING_RUNTIME_FILE_MESSAGE)}; '
-            "exit 0; fi; "
-            f'if [ "$runtime_status" -ne 0 ]; then {_posix_emit_system_message(UNREADABLE_RUNTIME_FILE_MESSAGE)}; '
-            "exit 0; fi; "
-        )
-    missing_python_action = "exit 0"
-    if not quiet_failure:
-        missing_python_action = (
-            f'if [ "$unsupported_python" -eq 1 ]; then {_posix_emit_system_message(UNSUPPORTED_PYTHON_MESSAGE)}; '
-            f'elif [ "$broken_python" -eq 1 ]; then {_posix_emit_system_message(BROKEN_PYTHON_MESSAGE)}; '
-            f"else {_posix_emit_system_message(MISSING_PYTHON_MESSAGE)}; fi; "
-            "exit 0"
-        )
-    runtime_command: str
-    if run_ensure:
-        runtime_command = (
-            f'if [ -n "$python_arg" ]; then "$python_cmd" "$python_arg" "$runtime" session-start --host {host} --detach <&3; '
-            f'else "$python_cmd" "$runtime" session-start --host {host} --detach <&3; fi; '
-            "exit $?"
-        )
-    else:
-        runtime_command = (
-            f'if [ -n "$python_arg" ]; then "$python_cmd" "$python_arg" "$runtime" collect --host {host} --lifecycle {lifecycle} --detach --quiet <&3 >/dev/null 2>&1; '
-            f'else "$python_cmd" "$runtime" collect --host {host} --lifecycle {lifecycle} --detach --quiet <&3 >/dev/null 2>&1; fi; '
-            "exit 0"
-        )
-    script = (
-        f"exec 3<&0; root={root_expr}; "
-        f'if [ -z "$root" ]; then {missing_root_action}; fi; '
-        f"{runtime_state_function}"
-        f"{runtime_check}"
-        f'probe="{PYTHON_VERSION_PROBE}"; '
-        "python_cmd=; python_arg=; unsupported_python=0; broken_python=0; "
-        "for candidate in python3 python; do "
-        'if ! command -v "$candidate" >/dev/null 2>&1; then continue; fi; '
-        '"$candidate" -c "$probe" >/dev/null 2>&1; status=$?; '
-        'if [ "$status" -eq 0 ]; then python_cmd="$candidate"; break; fi; '
-        'if [ "$status" -eq 2 ]; then unsupported_python=1; else broken_python=1; fi; '
-        "done; "
-        'if [ -z "$python_cmd" ] && command -v py >/dev/null 2>&1; then '
-        'py -3 -c "$probe" >/dev/null 2>&1; status=$?; '
-        'if [ "$status" -eq 0 ]; then python_cmd=py; python_arg=-3; '
-        'elif [ "$status" -eq 2 ]; then unsupported_python=1; else broken_python=1; fi; '
-        "fi; "
-        'if [ -z "$python_cmd" ]; then '
-        f"{missing_python_action}; "
-        "fi; "
-        f"{runtime_command}"
-    )
-    return f"sh -c {shlex.quote(script)}"
-
-
-def _posix_emit_system_message(message: str) -> str:
-    return f'printf "%s\\n" "{_hook_json_system_message(message)}"'
 
 
 def _write_plugin_manifest(target_root: Path, records: tuple[ManagedRuntimeRecord, ...]) -> None:

@@ -1,0 +1,96 @@
+name: Native managed runtime
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  freeze:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            platform: linux-x86_64
+          - runner: macos-15
+            platform: darwin-arm64
+          - runner: macos-15-intel
+            platform: darwin-x86_64
+          - runner: windows-2022
+            platform: windows-x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Windows'
+        with:
+          node-version: '22'
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --frozen --python 3.11
+      - name: Freeze platform runtime
+        run: uv run --python 3.11 --with pyinstaller==6.22.0 --with certifi==2026.7.22 python scripts/build_native_runtime.py freeze --output native-bundle --archive native-${{ matrix.platform }}.zip
+      - name: Exercise actual binaries, shell contracts and detached upload without interpreters
+        run: uv run python -m scripts.ci_native_runtime_smoke --bundle native-bundle
+      - name: Preserve cross-process state locking qualification
+        run: uv run python scripts/ci_managed_runtime_smoke.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.platform }}
+          path: native-${{ matrix.platform }}.zip
+          retention-days: 7
+
+  assemble:
+    needs: freeze
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --frozen
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: platform-artifacts
+          merge-multiple: true
+      - name: Validate and extract platform artifacts
+        run: |
+          uv run python - <<'PY'
+          from pathlib import Path
+          from promptless_instruction_hub.native_runtime import extract_bundle
+          for archive in Path('platform-artifacts').glob('*.zip'):
+              extract_bundle(archive, archive.with_suffix(''))
+          PY
+      - name: Assemble complete release and embed it in compiler distributions
+        run: >-
+          uv run python scripts/build_native_runtime.py assemble
+          --input platform-artifacts/native-darwin-arm64
+          --input platform-artifacts/native-darwin-x86_64
+          --input platform-artifacts/native-linux-x86_64
+          --input platform-artifacts/native-windows-x86_64
+          --output src/promptless_instruction_hub/native_runtime_bundle
+          --archive native-runtime.zip
+      - name: Build wheel through the source distribution
+        run: |
+          uv build --sdist --no-sources --out-dir dist
+          uv build --wheel --no-sources --out-dir dist dist/*.tar.gz
+      - name: Smoke installed wheel and embedded bundle
+        run: |
+          uv venv --python 3.11 /tmp/native-wheel
+          uv pip install --python /tmp/native-wheel/bin/python dist/*.whl pytest
+          /tmp/native-wheel/bin/python -m scripts.ci_native_runtime_smoke --bundle /tmp/native-wheel/lib/python3.11/site-packages/promptless_instruction_hub/native_runtime_bundle --complete --embedded
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-runtime-release
+          path: |
+            native-runtime.zip
+            src/promptless_instruction_hub/native_runtime_bundle/native-runtime.json
+            dist/*
+          retention-days: 7

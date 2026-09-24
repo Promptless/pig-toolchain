@@ -478,9 +478,9 @@ def _validate_managed_runtimes(manifest_path: Path, runtimes: list[JsonValue], k
     for index, runtime_value in enumerate(runtimes):
         runtime = _require_mapping_value(manifest_path, runtime_value, f"{key_path}[{index}]")
         runtime_path = f"{key_path}[{index}]"
-        if set(runtime) != MANAGED_RUNTIME_KEYS:
+        if set(runtime) not in (MANAGED_RUNTIME_KEYS, MANAGED_RUNTIME_KEYS | {"source_sha256", "platforms"}):
             expected = ", ".join(sorted(MANAGED_RUNTIME_KEYS))
-            msg = f"{manifest_path}: {runtime_path} must contain exactly these keys: {expected}"
+            msg = f"{manifest_path}: {runtime_path} must contain these keys (and optional native source_sha256/platforms): {expected}"
             raise ValueError(msg)
         runtime_id = runtime["id"]
         if runtime_id != HOST_RUNTIME_ID:
@@ -493,7 +493,7 @@ def _validate_managed_runtimes(manifest_path: Path, runtimes: list[JsonValue], k
         if target not in {"claude", "codex", "cursor"}:
             msg = f"{manifest_path}: {runtime_path}.target must be claude, codex, or cursor"
             raise ValueError(msg)
-        for string_key in set(runtime) - {"id", "status", "target", "sha256"}:
+        for string_key in set(runtime) - {"id", "status", "target", "sha256", "source_sha256", "platforms"}:
             value = runtime[string_key]
             if not isinstance(value, str) or not value:
                 msg = f"{manifest_path}: {runtime_path}.{string_key} must be a non-empty string"
@@ -503,6 +503,23 @@ def _validate_managed_runtimes(manifest_path: Path, runtimes: list[JsonValue], k
             _require_string(manifest_path, runtime, "sha256", display_path=f"{runtime_path}.sha256"),
             f"{runtime_path}.sha256",
         )
+        if "source_sha256" in runtime:
+            _validate_sha256(
+                manifest_path,
+                _require_string(manifest_path, runtime, "source_sha256", display_path=f"{runtime_path}.source_sha256"),
+                f"{runtime_path}.source_sha256",
+            )
+            platforms = runtime["platforms"]
+            if (
+                not isinstance(platforms, list)
+                or any(
+                    not isinstance(platform, str)
+                    or platform not in {"darwin-arm64", "darwin-x86_64", "linux-x86_64", "windows-x86_64"}
+                    for platform in platforms
+                )
+                or len(set(platforms)) != len(platforms)
+            ):
+                raise ValueError(f"{manifest_path}: {runtime_path}.platforms must contain unique supported platforms")
 
 
 def _require_mapping(

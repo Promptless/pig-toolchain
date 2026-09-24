@@ -1,0 +1,1 @@
+This self-signed localhost certificate and public test private key are only for the native runtime TLS smoke. They are not credentials and must never be used outside tests. The certificate covers localhost and 127.0.0.1.

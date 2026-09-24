@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 
 from .contracts import (
@@ -19,6 +20,7 @@ from .contracts import (
     RUNTIME_VERSION,
     RuntimeMetadata,
 )
+from .native_bundle import frozen_runtime_root, validate_bundle
 from .runtime_config import RUNTIME_CONFIG_NAME, RUNTIME_CONFIG_SCHEMA_VERSION, normalize_https_origin
 from .validation import _normalize_base_url, _string_value
 
@@ -34,6 +36,8 @@ def _resolve_host(host_arg: str) -> Host:
 
 
 def _plugin_root() -> Path | None:
+    if getattr(sys, "frozen", False):
+        return frozen_runtime_root().parent
     raw_root = (
         os.environ.get("CURSOR_PLUGIN_ROOT") or os.environ.get("PLUGIN_ROOT") or os.environ.get("CLAUDE_PLUGIN_ROOT")
     )
@@ -173,9 +177,12 @@ def _load_runtime_metadata(plugin_root: Path | None, host: Host) -> RuntimeMetad
 
 
 def _self_sha256() -> str:
+    if getattr(sys, "frozen", False):
+        manifest = validate_bundle(frozen_runtime_root(), complete=False)
+        return str(manifest["bundle_sha256"])
     package_root = Path(__file__).resolve().parent
     bundle_root = package_root.parent
-    files = [bundle_root / RUNTIME_EXECUTABLE, bundle_root / "cursor-hook.cjs"]
+    files = [bundle_root / RUNTIME_EXECUTABLE]
     files.extend(
         path
         for path in package_root.rglob("*")
