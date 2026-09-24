@@ -21,7 +21,7 @@ from promptless_instruction_hub.fs import read_yaml_mapping, write_yaml
 from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.native_bundle import (
     validate_bundle,
 )
-from tests.managed_bootstrap.helpers import _FakeWorkerServer
+from tests.managed_bootstrap.helpers import _FakeWorkerServer, _diagnostic_log_path
 from tests.managed_bootstrap.test_device_enrollment import DeviceAPI
 
 
@@ -83,16 +83,20 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
             body = json.dumps({"sessionId": "native-smoke", "transcriptPath": str(transcript)})
             hooks = json.loads((plugin / "hooks/hooks.json").read_text())["hooks"]
             terminal = hooks["Stop"][0]["hooks"][0]
+            startup = hooks["SessionStart"][0]["hooks"][0]
             if os.name == "nt":
                 powershells = [shutil.which(name) for name in ("powershell", "pwsh")]
                 assert all(powershells), "Both Windows PowerShell 5.1 and PowerShell 7 must be qualified"
                 command = terminal["commandWindows"].replace("${PLUGIN_ROOT}", str(plugin))
                 for shell in powershells:
                     assert shell is not None
+                    startup_command = startup["commandWindows"].replace("${PLUGIN_ROOT}", str(plugin))
+                    run([shell, "-NoProfile", "-NonInteractive", "-Command", startup_command], env, body)
                     run([shell, "-NoProfile", "-NonInteractive", "-Command", command], env, body, timeout=3)
             else:
                 for shell in ("/bin/sh", "/bin/bash", "/bin/zsh", "/bin/dash"):
                     if Path(shell).exists():
+                        run([shell, "-c", startup["command"]], env, body)
                         run([shell, "-c", terminal["command"]], env, body, timeout=3)
             deadline = time.monotonic() + 20
             while not server.trace_batches and time.monotonic() < deadline:
@@ -159,7 +163,19 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
                 time.sleep(0.05)
             assert status_path.exists(), "Frozen Cursor supervisor did not finish"
             status = json.loads(status_path.read_text())
-            assert status["status"] == "completed", status
+            if status["status"] != "completed":
+                cursor_runtime = cursor_plugin / "runtime" / runtime.name
+                replay = subprocess.run(
+                    [str(cursor_runtime), "cursor-notify", "--lifecycle", "stop"],
+                    env=env,
+                    input=cursor_body,
+                    text=True,
+                    encoding="utf-8",
+                    capture_output=True,
+                    timeout=90,
+                )
+                diagnostics = _diagnostic_log_path(home).read_text(encoding="utf-8")
+                raise AssertionError(f"{status}\n{replay.stdout}\n{replay.stderr}\n{diagnostics}")
         finally:
             server.stop()
         # A local TLS worker proves verification remains enabled and custom roots
