@@ -29,17 +29,30 @@ declare -a release_worktrees=()
 declare -a marketplace_pointer_paths=()
 declare -a temp_paths=()
 original_origin_url=""
+run_completed=false
 
 cleanup_temp_paths() {
-  set +u
-  for worktree_path in "${release_worktrees[@]}"; do
+  local status=$?
+  local cleanup_status=0
+  trap - EXIT
+  # Bash 3.2 can report zero here after a nounset abort. Only reaching the end
+  # of the script proves success, including writing the action's output.
+  if [[ "$status" -eq 0 && "$run_completed" != "true" ]]; then
+    status=1
+  fi
+  for worktree_path in ${release_worktrees[@]+"${release_worktrees[@]}"}; do
     if [[ -d "$worktree_path" ]]; then
-      git -C "$repo_root" worktree remove "$worktree_path" --force >/dev/null 2>&1 || rm -rf "$worktree_path"
+      git -C "$repo_root" worktree remove "$worktree_path" --force >/dev/null 2>&1 \
+        || rm -rf "$worktree_path" || cleanup_status=$?
     fi
   done
-  for temp_path in "${temp_paths[@]}"; do
-    rm -rf "$temp_path"
+  for temp_path in ${temp_paths[@]+"${temp_paths[@]}"}; do
+    rm -rf "$temp_path" || cleanup_status=$?
   done
+  if [[ "$status" -eq 0 ]]; then
+    status="$cleanup_status"
+  fi
+  exit "$status"
 }
 
 trap cleanup_temp_paths EXIT
@@ -106,7 +119,7 @@ append_generated_path() {
   local components=()
   local IFS="/"
   read -r -a components <<< "$path"
-  for component in "${components[@]}"; do
+  for component in ${components[@]+"${components[@]}"}; do
     [[ -z "$component" || "$component" == "." || "$component" == ".." ]] && reject_generated_path "$1"
   done
 
@@ -115,7 +128,7 @@ append_generated_path() {
 
 while IFS= read -r line; do
   read -r -a path_tokens <<< "$line"
-  for path in "${path_tokens[@]}"; do
+  for path in ${path_tokens[@]+"${path_tokens[@]}"}; do
     append_generated_path "$path"
   done
 done <<< "$generated_paths_input"
@@ -123,7 +136,7 @@ done <<< "$generated_paths_input"
 # Resolution is generated with the payload and committed beside source pointers,
 # even when callers customize the list of generated plugin paths.
 external_lock_path="hub.external-plugins.lock.json"
-if [[ " ${generated_paths[*]} " != *" $external_lock_path "* ]]; then
+if [[ " ${generated_paths[*]-} " != *" $external_lock_path "* ]]; then
   generated_paths+=("$external_lock_path")
 fi
 
@@ -317,7 +330,7 @@ copy_generated_paths() {
   local destination_root="$1"
   local hub_rel="$2"
 
-  for generated_path in "${generated_paths[@]}"; do
+  for generated_path in ${generated_paths[@]+"${generated_paths[@]}"}; do
     local source_path="$hub_root/$generated_path"
     local destination_path
     if [[ -n "$hub_rel" ]]; then
@@ -339,7 +352,7 @@ copy_payload_generated_paths() {
   local destination_root="$2"
   local hub_rel="$3"
 
-  for generated_path in "${generated_paths[@]}"; do
+  for generated_path in ${generated_paths[@]+"${generated_paths[@]}"}; do
     local source_path
     local destination_path
     if [[ -n "$hub_rel" ]]; then
@@ -376,7 +389,7 @@ cleanup_legacy_generated_paths() {
 restore_generated_paths_on_default_branch() {
   local hub_rel="$1"
 
-  for generated_path in "${generated_paths[@]}"; do
+  for generated_path in ${generated_paths[@]+"${generated_paths[@]}"}; do
     local repo_path
     if [[ -n "$hub_rel" ]]; then
       repo_path="$hub_rel/$generated_path"
@@ -613,7 +626,7 @@ prepare_source_commit() {
   local config_path="${hub_rel:+$hub_rel/}hub.yaml"
   pig set-version --hub "$worktree/${hub_rel:-.}" --version "$publish_version"
 
-  for pointer_path in "${marketplace_pointer_paths[@]}"; do
+  for pointer_path in ${marketplace_pointer_paths[@]+"${marketplace_pointer_paths[@]}"}; do
     local prepared_path="$pointer_root/$pointer_path"
     local destination_path="$worktree/$pointer_path"
     if [[ -f "$prepared_path" ]]; then
@@ -624,7 +637,7 @@ prepare_source_commit() {
     fi
   done
 
-  git -C "$worktree" add -A -- "$config_path" "${marketplace_pointer_paths[@]}"
+  git -C "$worktree" add -A -- "$config_path" ${marketplace_pointer_paths[@]+"${marketplace_pointer_paths[@]}"}
   # Git skips lease checks for unchanged refs. Every release update needs a
   # source commit, including explicit versions whose hub.yaml is already current.
   if [[ "$release_commit" != "$release_base" ]] || ! git -C "$worktree" diff --cached --quiet; then
@@ -703,3 +716,4 @@ esac
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   printf 'release-branch=%s\n' "$release_branch" >> "$GITHUB_OUTPUT"
 fi
+run_completed=true

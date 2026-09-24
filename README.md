@@ -242,6 +242,9 @@ come from `name` where the target supports them. Authored plugin output goes to
 `dist/{target}/{plugin.id}/`. Gemini receives extensions with the same plugin
 IDs; it has no generated marketplace manifest.
 
+`pig init` requires `--org` with your organization's name; there is no default
+organization. Empty or whitespace-only names are rejected before any files are
+created, and surrounding whitespace is trimmed.
 `pig init --org Acme` defaults to marketplace ID `acme-instruction-hub` and
 display name `Acme Instruction Hub`. Override those with `--marketplace-id` and
 `--marketplace-name`. `version` is the hub release version shared by all compiled

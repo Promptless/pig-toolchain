@@ -46,7 +46,7 @@ def test_publish_version_bumps_when_package_membership_changes(tmp_path: Path) -
 
 def test_publish_version_prefers_manual_semver_promotion(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root, version="1.0.0-alpha.1")
+    init_hub(hub_root, version="1.0.0-alpha.1", org="Promptless")
     build_hub(hub_root)
     previous_release_root = tmp_path / "previous-release"
     shutil.copytree(hub_root, previous_release_root)
@@ -59,7 +59,7 @@ def test_publish_version_prefers_manual_semver_promotion(tmp_path: Path) -> None
 
 def test_publish_version_prefers_higher_configured_version_floor(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root, version="0.1.1")
+    init_hub(hub_root, version="0.1.1", org="Promptless")
     build_hub(hub_root)
     previous_release_root = tmp_path / "previous-release"
     shutil.copytree(hub_root, previous_release_root)
@@ -89,7 +89,7 @@ def test_publish_version_rejects_legacy_managed_runtime_id_in_previous_release(t
 
 def test_publish_version_rejects_invalid_authoritative_release_manifest(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     previous_release_root = tmp_path / "previous-release"
     previous_release_root.mkdir()
     (previous_release_root / "hub.release.json").write_text(
@@ -102,7 +102,7 @@ def test_publish_version_rejects_invalid_authoritative_release_manifest(tmp_path
 
 def test_publish_version_rejects_malformed_authoritative_version_basis(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     previous_release_root = tmp_path / "previous-release"
     previous_release_root.mkdir()
     (previous_release_root / "hub.release.json").write_text(
@@ -119,7 +119,7 @@ def test_publish_version_rejects_empty_authoritative_version_basis_required_list
     field: str,
 ) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     build_hub(hub_root)
     previous_release_root = tmp_path / "previous-release"
     shutil.copytree(hub_root, previous_release_root)
@@ -134,7 +134,7 @@ def test_publish_version_rejects_empty_authoritative_version_basis_required_list
 
 def test_publish_version_reports_nested_authoritative_version_basis_path(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     build_hub(hub_root)
     previous_release_root = tmp_path / "previous-release"
     shutil.copytree(hub_root, previous_release_root)
@@ -171,7 +171,7 @@ def test_publish_version_rejects_authoritative_release_manifest_tampering(
     message: str,
 ) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     _configure_split_plugin_hub(hub_root, targets=("claude", "codex"))
     build_hub(hub_root)
     previous_release_root = tmp_path / "previous-release"
@@ -202,7 +202,7 @@ def test_publish_version_rejects_authoritative_release_manifest_tampering(
 
 def test_publish_version_rejects_authoritative_release_manifest_unexpected_root_key(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     build_hub(hub_root)
     previous_release_root = tmp_path / "previous-release"
     shutil.copytree(hub_root, previous_release_root)
@@ -217,7 +217,7 @@ def test_publish_version_rejects_authoritative_release_manifest_unexpected_root_
 
 def test_publish_version_rejects_previous_release_without_version_metadata(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root, version="0.2.0")
+    init_hub(hub_root, version="0.2.0", org="Promptless")
     previous_release_root = tmp_path / "previous-release"
     previous_release_root.mkdir()
     (previous_release_root / "README.md").write_text("# Previous release\n")
@@ -228,7 +228,7 @@ def test_publish_version_rejects_previous_release_without_version_metadata(tmp_p
 
 def test_publish_version_ignores_repo_context_inventory(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     _configure_split_plugin_hub(hub_root, targets=("claude", "codex"))
     build_hub(hub_root)
     previous_release_root = tmp_path / "previous-release"
@@ -242,7 +242,7 @@ def test_publish_version_ignores_repo_context_inventory(tmp_path: Path) -> None:
 
 def test_publish_version_rejects_release_manifest_without_version_basis(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     previous_release_root = tmp_path / "previous-release"
     previous_release_root.mkdir()
     (previous_release_root / "hub.release.json").write_text(
@@ -255,7 +255,7 @@ def test_publish_version_rejects_release_manifest_without_version_basis(tmp_path
 
 def test_publish_version_reports_malformed_previous_release_json_path(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     previous_release_root = tmp_path / "previous-release"
     previous_release_root.mkdir()
     (previous_release_root / "hub.release.json").write_text("{")
@@ -266,7 +266,7 @@ def test_publish_version_reports_malformed_previous_release_json_path(tmp_path: 
 
 def test_publish_version_reports_malformed_previous_release_json_encoding_path(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     previous_release_root = tmp_path / "previous-release"
     previous_release_root.mkdir()
     (previous_release_root / "hub.release.json").write_bytes(b"\xff")
@@ -277,7 +277,7 @@ def test_publish_version_reports_malformed_previous_release_json_encoding_path(t
 
 def test_publish_version_rejects_missing_previous_hub_path(tmp_path: Path) -> None:
     hub_root = tmp_path / "repo/hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     previous_release_root = tmp_path / "previous-release"
     previous_release_root.mkdir()
 
@@ -287,7 +287,7 @@ def test_publish_version_rejects_missing_previous_hub_path(tmp_path: Path) -> No
 
 def test_publish_version_rejects_previous_release_without_manifest(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root, version="0.3.0")
+    init_hub(hub_root, version="0.3.0", org="Promptless")
     previous_release_root = tmp_path / "previous-release"
     previous_release_root.mkdir()
     (previous_release_root / "dist").mkdir()

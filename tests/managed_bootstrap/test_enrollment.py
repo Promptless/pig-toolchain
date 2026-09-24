@@ -48,7 +48,7 @@ from .helpers import (
 
 def test_bootstrap_unreachable_worker_exits_zero_without_config_write(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     home = tmp_path / "home"
@@ -99,7 +99,7 @@ def test_bootstrap_unreachable_worker_exits_zero_without_config_write(tmp_path: 
 
 def test_bootstrap_runs_without_local_dogfood_gate(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     server = _FakeWorkerServer()
@@ -141,7 +141,7 @@ def test_bootstrap_welcomes_is_internal_promptless_user_once_per_plugin_version(
     identity_location: str,
 ) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root, version="0.1.0")
     internal_policy = _policy_with()
@@ -258,7 +258,7 @@ def test_bootstrap_ignores_non_internal_worker_identity(
     email: str,
 ) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     policy = _policy_with()
@@ -300,7 +300,7 @@ def test_bootstrap_ignores_non_internal_worker_identity(
 
 def test_cached_credential_trusts_only_persisted_internal_flag(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     server = _FakeWorkerServer()
@@ -347,7 +347,7 @@ def test_cached_credential_trusts_only_persisted_internal_flag(tmp_path: Path) -
 
 def test_bootstrap_welcomes_is_internal_promptless_user_from_poll_response(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     server = _FakeWorkerServer(poll_response=_approved_poll_response(user_email="Adit@GoPromptless.AI"))
@@ -548,7 +548,7 @@ def test_reset_clears_first_successful_enrollment_latch(tmp_path: Path) -> None:
 
 def test_bootstrap_surfaces_browser_open_failure(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     server = _FakeWorkerServer()
@@ -620,7 +620,7 @@ def test_linux_browser_session_detection_accepts_graphical_or_wsl_session(displa
 
 def test_bootstrap_persists_host_global_state_file(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     server = _FakeWorkerServer()
@@ -783,7 +783,7 @@ def test_bootstrap_concurrent_pig_versions_enroll_once(tmp_path: Path, older_plu
 
 def test_bootstrap_rejects_plaintext_non_loopback_worker_base_url(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     home = tmp_path / "home"

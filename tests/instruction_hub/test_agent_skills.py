@@ -27,7 +27,7 @@ def _write_agent(
     role: str = ROLE,
     plugin: str = "pig",
 ) -> Path:
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     source = hub / "assets/agents" / f"{role}.md"
     frontmatter = metadata if metadata is not None else {"name": role, "description": "Use when records disagree."}
     source.write_text("---\n" + yaml.safe_dump(frontmatter) + "---\n" + BODY)
