@@ -234,11 +234,13 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
     state = mapping(json.loads(state_path.read_text())) if state_path.exists() else {}
     offsets = mapping(state.get("offsets"))
     retry_offsets = mapping(state.get("retry_offsets"))
-    saved_pending = state.get("pending")
+    traversals = mapping(state.get("traversals"))
+    traversal = mapping(traversals.get(subject or ""))
+    saved_pending = traversal.get("pending")
     database_revision = _database_revision()
     saved_completed = (
-        state.get("completed")
-        if database_revision is not None and database_revision == state.get("database_revision")
+        traversal.get("completed")
+        if database_revision is not None and database_revision == traversal.get("database_revision")
         else None
     )
     resumed = [key for key in saved_pending if isinstance(key, str)] if isinstance(saved_pending, list) else []
@@ -330,6 +332,16 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
             completed.discard(session_id)
             retry.append(session_id)
     remaining = [session_id for session_id, _ in pending] + retry
+    # The notification queue retries each subject independently. An unreadable
+    # old subject must not hold up acknowledgment of another notification.
+    if remaining:
+        traversals[subject or ""] = {
+            "pending": remaining,
+            "completed": sorted(completed) if pending else [],
+            "database_revision": database_revision,
+        }
+    else:
+        traversals.pop(subject or "", None)
     # Save traversal progress only after journal fsyncs. Crash replay is idempotent.
     _atomic_write_text(
         state_path,
@@ -338,9 +350,7 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
                 "offsets": offsets,
                 "retry_offsets": retry_offsets,
                 "after": after,
-                "pending": remaining,
-                "completed": sorted(completed) if pending else [],
-                "database_revision": database_revision,
+                "traversals": traversals,
             }
         ),
     )

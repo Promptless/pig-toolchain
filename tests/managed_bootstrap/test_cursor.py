@@ -763,6 +763,29 @@ def test_pending_subagent_does_not_prevent_sessions_refreshing(
     assert [row["event"]["text"] for row in rows] == ["old", "new"]
 
 
+def test_unrelated_pending_session_does_not_block_notification_completion(database: sqlite3.Connection) -> None:
+    def context(session_id: str) -> HookTraceContext:
+        return HookTraceContext(
+            session_id=session_id,
+            transcript_path=None,
+            agent_transcript_path=None,
+            parent_session_id=None,
+            agent_id=None,
+            agent_type=None,
+        )
+
+    assert not cursor_capture.prepare_journals(context("unsaved"), "session_end").complete
+    put(database, "composerData:saved", {"fullConversationHeadersOnly": [{"bubbleId": "a"}]})
+    put(database, "bubbleId:saved:a", {"type": 1, "text": "saved message"})
+    for _ in range(3):
+        assert cursor_capture.prepare_journals(context("saved"), "session_end").complete
+    assert not cursor_capture.prepare_journals(context("unsaved"), "session_end").complete
+    put(database, "composerData:unsaved", {"fullConversationHeadersOnly": [{"bubbleId": "a"}]})
+    put(database, "bubbleId:unsaved:a", {"type": 1, "text": "recovered message"})
+    assert cursor_capture.prepare_journals(context("unsaved"), "session_end").complete
+    assert "recovered message" in (cursor_capture.spool_root() / "journals/unsaved.jsonl").read_text()
+
+
 def test_cursor_collect_uploads_only_acknowledged_journal_ranges(tmp_path: Path) -> None:
     """Exercise generated bundle, enrollment, native export, gzip upload and ledger."""
     import gzip
