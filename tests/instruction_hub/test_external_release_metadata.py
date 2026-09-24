@@ -14,7 +14,7 @@ from .external_helpers import PLUGIN_PATH, UPSTREAM_URL, external_definition, wr
 
 @pytest.fixture
 def recorded_release(tmp_path: Path) -> Path:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     write_external(tmp_path, external_definition())
     build_hub(tmp_path)
     verification_path = tmp_path / "verification.json"

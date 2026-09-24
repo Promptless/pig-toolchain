@@ -79,7 +79,7 @@ def test_collection_outcome_preserves_command_exit_behavior(
 
 def test_host_runtime_requires_subcommand_and_reports_version(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/codex/pig"

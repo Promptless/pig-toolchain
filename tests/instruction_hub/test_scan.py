@@ -37,7 +37,7 @@ def test_init_creates_empty_hub_contract(tmp_path: Path) -> None:
 
 def test_scan_imports_skills_and_inventories_repo_context(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
 
     result = scan_hub(hub_root, FIXTURES / "dogfood-source")
 
@@ -60,7 +60,7 @@ def test_scan_imports_skills_and_inventories_repo_context(tmp_path: Path) -> Non
 
 def test_scan_rejects_legacy_core_hub_before_mutating(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     pig_package = hub_root / "plugins/pig.yaml"
     core_package = hub_root / "plugins/core.yaml"
     pig_package.rename(core_package)
@@ -92,7 +92,7 @@ def test_scan_imports_cursor_only_mcp_config(tmp_path: Path) -> None:
             }
         )
     )
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
 
     result = scan_hub(hub_root, source_root)
     build_hub(hub_root)
@@ -138,7 +138,7 @@ def test_scan_imports_cursor_mcp_override_when_root_differs(tmp_path: Path) -> N
             }
         )
     )
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
 
     result = scan_hub(hub_root, source_root)
     build_hub(hub_root)
@@ -159,7 +159,7 @@ def test_scan_normalizes_lowercase_skill_file_to_canonical_name(tmp_path: Path) 
     skill_root = source_root / ".agents/skills/lowercase"
     skill_root.mkdir(parents=True)
     (skill_root / "skill.md").write_text("# Lowercase\n")
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
 
     scan_hub(hub_root, source_root)
 
@@ -178,7 +178,7 @@ def test_scan_rejects_skill_slug_collisions(tmp_path: Path) -> None:
     second_skill.mkdir(parents=True)
     (first_skill / "SKILL.md").write_text("# First\n")
     (second_skill / "SKILL.md").write_text("# Second\n")
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
 
     with pytest.raises(InstructionHubError, match="both map to asset id"):
         scan_hub(hub_root, source_root)
@@ -193,7 +193,7 @@ def test_scan_rejects_symlinked_source_skill_directories(tmp_path: Path) -> None
     (outside_skill / "SKILL.md").write_text("# Outside\n")
     (source_root / ".agents/skills").mkdir(parents=True)
     os.symlink(outside_skill, source_root / ".agents/skills/outside")
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
 
     with pytest.raises(InstructionHubError, match="symlink"):
         scan_hub(hub_root, source_root)
@@ -220,7 +220,7 @@ def test_scan_rejects_symlinked_source_mcp_configs(
     outside_mcp.write_text(json.dumps({"mcpServers": {"leak": {"command": "leak"}}}))
     (source_root / mcp_path.parent).mkdir(parents=True, exist_ok=True)
     os.symlink(outside_mcp, source_root / mcp_path)
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
 
     with pytest.raises(InstructionHubError, match="symlink"):
         scan_hub(hub_root, source_root)

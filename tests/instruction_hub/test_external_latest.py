@@ -64,7 +64,7 @@ def test_latest_resolves_once_and_builds_the_verified_pin_offline(
     upstream, hub = tmp_path / "upstream", tmp_path / "hub"
     sha = make_upstream(upstream, monkeypatch, path=path)
     _git(upstream, "branch", "-m", "trunk")
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     definition = latest_definition(path=path)
     write_external(hub, definition)
     validate_hub(hub)
@@ -115,7 +115,7 @@ def test_offline_build_rejects_stale_or_invalid_locks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
 ) -> None:
     make_upstream(tmp_path / "upstream", monkeypatch)
-    hub = init_hub(tmp_path / "hub")
+    hub = init_hub(tmp_path / "hub", org="Promptless")
     write_external(hub, latest_definition())
     resolve_external_plugins(hub)
     lock = json.loads((hub / EXTERNAL_LOCK_PATH).read_text())
@@ -147,7 +147,7 @@ def test_requested_sources_cannot_escape_into_marketplaces_or_release_provenance
         external_marketplace_entry(ExternalPluginDefinition.model_validate(definition), "cursor")
     with pytest.raises(ValueError, match="pinned external"):
         validate_external_marketplace_source({"source": "url", "url": UPSTREAM_URL, "ref": ref})
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     write_external(tmp_path, external_definition())
     build_hub(tmp_path)
     path = tmp_path / "hub.release.json"
@@ -160,7 +160,7 @@ def test_requested_sources_cannot_escape_into_marketplaces_or_release_provenance
 
 @pytest.mark.parametrize("ref", ["latest", "a" * 40])
 def test_resolution_preserves_catalog_requests_and_resolves_only_stable_plugins(tmp_path: Path, ref: str) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     definition = external_definition(ref)
     write_external(tmp_path, definition)
     # An unselected latest plugin does not need a lock or enter the build.
@@ -183,7 +183,7 @@ def test_resolution_preserves_catalog_requests_and_resolves_only_stable_plugins(
 
 
 def test_switching_latest_to_the_same_fixed_commit_preserves_release_identity(tmp_path: Path) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     write_external(tmp_path, latest_definition())
     lock = ExternalPluginLock(plugins={"doc-detective": ResolvedGitSource(type="git", url=UPSTREAM_URL, sha="a" * 40)})
     (tmp_path / EXTERNAL_LOCK_PATH).write_text(lock.model_dump_json())

@@ -14,7 +14,7 @@ from promptless_instruction_hub.errors import InstructionHubError
 
 def test_validate_rejects_empty_stable_plugins(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "hub.yaml").write_text(
         "\n".join(
             [
@@ -35,7 +35,7 @@ def test_validate_rejects_empty_stable_plugins(tmp_path: Path) -> None:
 
 def test_validate_requires_pig_stable_package(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "plugins/customer.yaml").write_text("id: customer\nname: Customer\nincludes: []\n")
     (hub_root / "hub.yaml").write_text((hub_root / "hub.yaml").read_text().replace("- pig\n", "- customer\n"))
 
@@ -45,7 +45,7 @@ def test_validate_requires_pig_stable_package(tmp_path: Path) -> None:
 
 def test_validate_rejects_empty_package_name(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "plugins/pig.yaml").write_text("id: pig\nname: ''\nincludes: []\n")
 
     with pytest.raises(InstructionHubError, match="name"):
@@ -54,7 +54,7 @@ def test_validate_rejects_empty_package_name(tmp_path: Path) -> None:
 
 def test_validate_rejects_unknown_package_refs(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "plugins/pig.yaml").write_text("id: pig\nname: PIG\nincludes:\n  - skill:missing\n")
 
     with pytest.raises(InstructionHubError, match="unknown asset refs"):
@@ -65,7 +65,7 @@ def test_validate_rejects_unknown_package_refs(tmp_path: Path) -> None:
 def test_validate_rejects_authored_managed_skill_in_pig(tmp_path: Path, skill_id: str) -> None:
     hub_root = tmp_path / "hub"
     skill_root = hub_root / "assets/skills" / skill_id
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     skill_root.mkdir(parents=True)
     (skill_root / "SKILL.md").write_text("# Customer updater\n")
     (hub_root / "plugins/pig.yaml").write_text(f"id: pig\nname: PIG\nincludes:\n  - skill:{skill_id}\n")
@@ -76,7 +76,7 @@ def test_validate_rejects_authored_managed_skill_in_pig(tmp_path: Path, skill_id
 
 def test_validate_merges_sparse_target_support_with_defaults(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "plugins/pig.yaml").write_text("id: pig\nname: PIG\nincludes:\n  - rule:partial\n")
     (hub_root / "assets/rules/partial.md").write_text("# Partial\n")
     (hub_root / "assets/rules/partial.asset.yaml").write_text(
@@ -100,7 +100,7 @@ def test_validate_merges_sparse_target_support_with_defaults(tmp_path: Path) -> 
 
 def test_validate_rejects_unsafe_asset_ids(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     skill_root = hub_root / "assets/skills/bad"
     skill_root.mkdir(parents=True)
     (skill_root / "SKILL.md").write_text("# Bad\n")
@@ -119,7 +119,7 @@ def test_validate_rejects_unsafe_asset_ids(tmp_path: Path) -> None:
 )
 def test_validate_rejects_empty_required_config_strings(tmp_path: Path, config_text: str) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "hub.yaml").write_text(config_text)
 
     with pytest.raises(InstructionHubError, match="String should have at least 1 character"):
@@ -128,7 +128,7 @@ def test_validate_rejects_empty_required_config_strings(tmp_path: Path, config_t
 
 def test_validate_rejects_empty_target_list(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "hub.yaml").write_text(
         "\n".join(
             [
@@ -149,7 +149,7 @@ def test_validate_rejects_empty_target_list(tmp_path: Path) -> None:
 
 def test_validate_rejects_metadata_type_mismatch(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "assets/rules/team-style.md").write_text("# Team Style\n")
     (hub_root / "assets/rules/team-style.asset.yaml").write_text("id: team-style\ntype: skill\n")
 
@@ -159,7 +159,7 @@ def test_validate_rejects_metadata_type_mismatch(tmp_path: Path) -> None:
 
 def test_validate_rejects_malformed_asset_candidates(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "assets/skills/broken").mkdir(parents=True)
 
     with pytest.raises(InstructionHubError, match="must contain SKILL.md"):
@@ -171,7 +171,7 @@ def test_validate_rejects_symlinked_skill_files(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     secret_path = tmp_path / "outside-secret.md"
     skill_root = hub_root / "assets/skills/leak"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     skill_root.mkdir(parents=True)
     secret_path.write_text("# Leaked\n\nexternal content\n")
     os.symlink(secret_path, skill_root / "SKILL.md")
@@ -184,7 +184,7 @@ def test_validate_rejects_symlinked_skill_files(tmp_path: Path) -> None:
 def test_validate_rejects_symlinked_mcp_files(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     outside_asset = tmp_path / "outside.json"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     outside_asset.write_text("{}\n")
     os.symlink(outside_asset, hub_root / "assets/mcps/leak.json")
 
@@ -196,7 +196,7 @@ def test_validate_rejects_symlinked_mcp_files(tmp_path: Path) -> None:
 def test_validate_rejects_symlinked_assets_root(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     outside_assets = tmp_path / "outside-assets"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     shutil.rmtree(hub_root / "assets")
     outside_assets.mkdir()
     os.symlink(outside_assets, hub_root / "assets")
@@ -208,7 +208,7 @@ def test_validate_rejects_symlinked_assets_root(tmp_path: Path) -> None:
 def test_validate_allows_json_array_files_inside_skill_assets(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     skill_root = hub_root / "assets/skills/json-fixture"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     skill_root.mkdir(parents=True)
     (skill_root / "SKILL.md").write_text("# JSON Fixture\n")
     (skill_root / "examples").mkdir()
@@ -219,7 +219,7 @@ def test_validate_allows_json_array_files_inside_skill_assets(tmp_path: Path) ->
 
 def test_validate_rejects_literal_mcp_secrets(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     mcp_path = hub_root / "assets/mcps/bad.yaml"
     mcp_path.write_text("api_token: sk-live-secret\n")
 
@@ -229,7 +229,7 @@ def test_validate_rejects_literal_mcp_secrets(tmp_path: Path) -> None:
 
 def test_validate_rejects_literal_mcp_authorization_headers(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "assets/mcps/bad.json").write_text(
         json.dumps(
             {
@@ -249,7 +249,7 @@ def test_validate_rejects_literal_mcp_authorization_headers(tmp_path: Path) -> N
 
 def test_validate_rejects_literal_secret_mcp_arg_values(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "assets/mcps/bad.json").write_text(
         json.dumps(
             {
@@ -269,7 +269,7 @@ def test_validate_rejects_literal_secret_mcp_arg_values(tmp_path: Path) -> None:
 
 def test_validate_rejects_literal_secret_mcp_inline_arg_values(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "assets/mcps/bad.json").write_text(
         json.dumps(
             {
@@ -289,7 +289,7 @@ def test_validate_rejects_literal_secret_mcp_inline_arg_values(tmp_path: Path) -
 
 def test_validate_accepts_env_placeholder_mcp_arg_values(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "assets/mcps/good.json").write_text(
         json.dumps(
             {
@@ -316,7 +316,7 @@ def test_validate_accepts_env_placeholder_mcp_arg_values(tmp_path: Path) -> None
 )
 def test_validate_rejects_malformed_mcp_server_shapes(tmp_path: Path, payload: object) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "assets/mcps/bad.json").write_text(json.dumps(payload))
 
     with pytest.raises(InstructionHubError, match="MCP server"):
@@ -325,7 +325,7 @@ def test_validate_rejects_malformed_mcp_server_shapes(tmp_path: Path, payload: o
 
 def test_build_rejects_same_priority_duplicate_mcp_servers(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "plugins/pig.yaml").write_text(
         "\n".join(
             [
@@ -347,7 +347,7 @@ def test_build_rejects_same_priority_duplicate_mcp_servers(tmp_path: Path) -> No
 
 def test_validate_wraps_malformed_yaml_with_path(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     config_path = hub_root / "hub.yaml"
     config_path.write_text("org: [\n")
 
@@ -357,7 +357,7 @@ def test_validate_wraps_malformed_yaml_with_path(tmp_path: Path) -> None:
 
 def test_validate_rejects_unimplemented_target_support_source(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "assets/rules/source-mode.md").write_text("# Source Mode\n")
     (hub_root / "assets/rules/source-mode.asset.yaml").write_text(
         "\n".join(
@@ -377,7 +377,7 @@ def test_validate_rejects_unimplemented_target_support_source(tmp_path: Path) ->
 
 def test_validate_rejects_mcp_support_modes_that_cannot_render(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "assets/mcps/trace.json").write_text(json.dumps({"trace": {"command": "trace-agent"}}))
     (hub_root / "assets/mcps/trace.asset.yaml").write_text(
         "\n".join(
@@ -396,7 +396,7 @@ def test_validate_rejects_mcp_support_modes_that_cannot_render(tmp_path: Path) -
 
 def test_validate_rejects_yaml_values_outside_json_manifest_contract(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     (hub_root / "assets/mcps/bad.yaml").write_text("1: one\n")
 
     with pytest.raises(ValueError, match="non-string mapping key"):

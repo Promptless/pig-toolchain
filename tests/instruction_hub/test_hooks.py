@@ -27,7 +27,7 @@ def config(event: str, command: str) -> dict[str, object]:
 
 
 def test_native_bundles_select_merge_and_preserve_managed_hooks(tmp_path: Path) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     enable_trace_ingestion(tmp_path)
     bundle(
         tmp_path,
@@ -64,7 +64,7 @@ def test_native_bundles_select_merge_and_preserve_managed_hooks(tmp_path: Path) 
 
 
 def test_legacy_file_and_bundle_coexist(tmp_path: Path) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     bundle(tmp_path, "b", {"hooks.json": config("Stop", "bundle")})
     (tmp_path / "assets/hooks/hooks.json").write_text(json.dumps(config("Stop", "legacy")))
     (tmp_path / "assets/hooks/hooks.asset.yaml").write_text("support:\n  codex:\n    mode: native\n")
@@ -75,7 +75,7 @@ def test_legacy_file_and_bundle_coexist(tmp_path: Path) -> None:
 
 
 def test_legacy_non_json_file_is_copied_without_inventing_configuration(tmp_path: Path) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     source = tmp_path / "assets/hooks/legacy.md"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("# Legacy hook instructions\n")
@@ -91,7 +91,7 @@ def test_legacy_non_json_file_is_copied_without_inventing_configuration(tmp_path
 
 @pytest.mark.parametrize("value", [[], {}, {"hooks": []}, {"hooks": {"Stop": ["bad"]}}, {"hooks": {"Stop": {}}}])
 def test_invalid_hook_configuration_fails(tmp_path: Path, value: object) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     bundle(tmp_path, "bad", {"hooks.json": value})
     (tmp_path / "plugins/pig.yaml").write_text("id: pig\nname: PIG\nincludes: [hook:bad]\n")
     with pytest.raises(InstructionHubError, match="hook"):
@@ -99,7 +99,7 @@ def test_invalid_hook_configuration_fails(tmp_path: Path, value: object) -> None
 
 
 def test_missing_target_config_fails_instead_of_silently_shipping(tmp_path: Path) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     bundle(tmp_path, "bad", {"hooks.codex.json": config("Stop", "codex")})
     (tmp_path / "plugins/pig.yaml").write_text("id: pig\nname: PIG\nincludes: [hook:bad]\n")
     with pytest.raises(InstructionHubError, match="native claude bundle requires"):
@@ -107,7 +107,7 @@ def test_missing_target_config_fails_instead_of_silently_shipping(tmp_path: Path
 
 
 def test_conflicting_top_level_fields_fail(tmp_path: Path) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     for name, version in (("a", 1), ("b", 2)):
         bundle(tmp_path, name, {"hooks.json": {"version": version, **config("Stop", name)}})
     (tmp_path / "plugins/pig.yaml").write_text("id: pig\nname: PIG\nincludes: [hook:a, hook:b]\n")

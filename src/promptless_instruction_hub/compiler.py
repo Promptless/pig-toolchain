@@ -77,12 +77,16 @@ class VerifyResult:
 def init_hub(
     hub_root: Path,
     *,
-    org: str = "Promptless",
+    org: str,
     marketplace_id: str | None = None,
     marketplace_name: str | None = None,
     version: str = "0.1.0",
 ) -> Path:
     """Initialize an empty customer-owned Instruction Hub repository."""
+
+    org = org.strip()
+    if not org:
+        raise ValueError("organization must not be empty or whitespace-only")
 
     root = hub_root.resolve()
     if (root / CONFIG_PATH).exists():
