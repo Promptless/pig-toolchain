@@ -216,6 +216,7 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
     state_path = spool_root() / "scan-state.json"
     state = mapping(json.loads(state_path.read_text())) if state_path.exists() else {}
     offsets = mapping(state.get("offsets"))
+    retry_offsets = mapping(state.get("retry_offsets"))
     saved_pending = state.get("pending")
     saved_completed = state.get("completed")
     resumed = [key for key in saved_pending if isinstance(key, str)] if isinstance(saved_pending, list) else []
@@ -252,10 +253,12 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
         page_complete = False
         try:
             offset = offsets.get(session_id, 0)
+            retry_offset = retry_offsets.get(session_id)
             page = read_session(
                 session_id,
                 deadline=min(deadline, time.monotonic() + 0.5),
                 offset=offset if isinstance(offset, int) else 0,
+                retry_offset=retry_offset if isinstance(retry_offset, int) else None,
             )
             observations = page.records
             for child in page.children:
@@ -293,6 +296,10 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
                 current = path
         if next_offset is not None:
             offsets[session_id] = next_offset
+            if page.retry_offset is None:
+                retry_offsets.pop(session_id, None)
+            else:
+                retry_offsets[session_id] = page.retry_offset
         if session_id != subject:
             after = session_id
         if page_complete:
@@ -307,6 +314,7 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
         json.dumps(
             {
                 "offsets": offsets,
+                "retry_offsets": retry_offsets,
                 "after": after,
                 "pending": remaining,
                 "completed": sorted(completed) if pending else [],
