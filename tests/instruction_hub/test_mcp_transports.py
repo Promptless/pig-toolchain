@@ -211,3 +211,19 @@ def test_build_validates_transport_after_selecting_host_specific_override(tmp_pa
         "type": "sse",
         "url": "https://example.invalid/events",
     }
+
+
+def test_build_preserves_claude_optional_remote_placeholder(tmp_path: Path) -> None:
+    hub_root = _mcp_hub(tmp_path, {"type": "http", "url": ""}, targets=("claude",))
+
+    build_hub(hub_root)
+
+    assert _rendered_servers(hub_root, "claude")["remote"] == {"type": "http", "url": ""}
+
+
+@pytest.mark.parametrize("server", [{"command": ""}, {"type": "http", "url": " "}])
+def test_claude_placeholder_exception_requires_empty_remote_url(tmp_path: Path, server: dict[str, JsonValue]) -> None:
+    hub_root = _mcp_hub(tmp_path, server, targets=("claude",))
+
+    with pytest.raises(InstructionHubError, match="non-empty"):
+        verify_hub(hub_root)

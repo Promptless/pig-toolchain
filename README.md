@@ -277,7 +277,8 @@ host-specific semantics, including environment interpolation, are not converted.
 Codex does not support SSE. Restrict an SSE asset's target support or provide a
 Codex-only HTTP definition with the same server name. Target-specific definitions
 override shared definitions before transport validation. WebSocket transport
-(`type: ws`) is supported only for Claude.
+(`type: ws`) is supported only for Claude. Claude also permits an empty remote
+URL as an unconfigured optional connector; other targets require a nonempty URL.
 
 ### External plugins
 

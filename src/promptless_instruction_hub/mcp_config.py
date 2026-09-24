@@ -22,8 +22,6 @@ def render_mcp_server(target: Harness, config: JsonValue, *, source: str) -> dic
         raise InstructionHubError(f"{source}: MCP server must declare exactly one of command, url, or httpUrl")
     connection_field = connection_fields[0]
     connection = config[connection_field]
-    if not isinstance(connection, str) or not connection.strip():
-        raise InstructionHubError(f"{source}: MCP {connection_field} must be a non-empty string")
     declared_type = config.get("type")
     declared_transport = config.get("transport")
     if declared_type is not None and declared_transport is not None and declared_type != declared_transport:
@@ -33,6 +31,9 @@ def render_mcp_server(target: Harness, config: JsonValue, *, source: str) -> dic
         transport = "stdio" if connection_field == "command" else "http"
     if transport not in ("stdio", "http", "sse", "ws"):
         raise InstructionHubError(f"{source}: unsupported MCP transport {transport!r}")
+    optional_claude_remote = target == "claude" and transport != "stdio" and connection == ""
+    if not isinstance(connection, str) or (not connection.strip() and not optional_claude_remote):
+        raise InstructionHubError(f"{source}: MCP {connection_field} must be a non-empty string")
     if (connection_field == "command") != (transport == "stdio"):
         raise InstructionHubError(f"{source}: MCP {transport} transport is incompatible with {connection_field}")
     if connection_field == "httpUrl" and transport != "http":
