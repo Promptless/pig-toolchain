@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import ssl
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -138,6 +139,24 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
                 status = json.loads(status_path.read_text()) if status_path.exists() else {"status": "missing"}
                 if status["status"] != "completed" or list(pending_path.glob("*.json")):
                     status_path.unlink(missing_ok=True)
+                    input_probe = ""
+                    if os.name == "nt":
+                        # Diagnostic only: inspect the synthetic fixture bytes
+                        # through the same host wrapper and batch file boundary.
+                        probe_script = workspace / "capture-input.py"
+                        probe_script.write_text("import sys; print(sys.stdin.buffer.read().hex())", encoding="utf-8")
+                        probe_batch = workspace / "capture-input.cmd"
+                        launcher = cursor_plugin / "runtime/cursor-hook.cmd"
+                        probe_batch.write_text(
+                            launcher.read_text().replace(
+                                '"%~dp0promptless-host-runtime.exe" cursor-hook --lifecycle %1',
+                                f'"{sys.executable}" "{probe_script}"',
+                            ),
+                            encoding="utf-8",
+                        )
+                        probe_command = [argument.replace(str(launcher), str(probe_batch)) for argument in command]
+                        probe = subprocess.run(probe_command, env=env, capture_output=True, text=True, timeout=30)
+                        input_probe = f"input probe={probe.returncode}: {probe.stdout} {probe.stderr}"
                     replay = subprocess.run(
                         [str(cursor_runtime), "cursor-hook", "--lifecycle", "stop"],
                         env=env,
@@ -155,7 +174,7 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
                         diagnostic_path.read_text(encoding="utf-8") if diagnostic_path.exists() else "no diagnostics"
                     )
                     raise AssertionError(
-                        f"{status}\nhost stdout={result.stdout}\nhost stderr={result.stderr}"
+                        f"{status}\nhost stdout={result.stdout}\nhost stderr={result.stderr}\n{input_probe}"
                         f"\ndirect cursor-hook={replay.returncode}: {replay.stdout}\n{replay.stderr}\n{diagnostics}"
                     )
 
