@@ -183,7 +183,7 @@ def test_scan_imports_independent_skills_from_all_host_roots(tmp_path: Path) -> 
         skill_root.mkdir(parents=True)
         (skill_root / "SKILL.md").write_text(f"# {name}\n")
         (skill_root / "reference.md").write_text(f"Reference for {name}\n")
-    init_hub(hub_root)
+    init_hub(hub_root, org="Acme")
 
     result = scan_hub(hub_root, source_root)
     build_hub(hub_root)
@@ -265,7 +265,7 @@ def test_scan_rejects_symlinked_source_skills_roots(tmp_path: Path, source_dir: 
     skills_root = source_root / source_dir
     skills_root.parent.mkdir(parents=True)
     os.symlink(outside_root, skills_root)
-    init_hub(hub_root)
+    init_hub(hub_root, org="Acme")
 
     with pytest.raises(InstructionHubError, match="symlink"):
         scan_hub(hub_root, source_root)
@@ -284,7 +284,7 @@ def test_scan_rejects_symlinked_files_inside_source_skills(tmp_path: Path, sourc
     outside_file = tmp_path / "private.md"
     outside_file.write_text("Private reference\n")
     os.symlink(outside_file, skill_root / "references/private.md")
-    init_hub(hub_root)
+    init_hub(hub_root, org="Acme")
 
     with pytest.raises(InstructionHubError, match="symlink"):
         scan_hub(hub_root, source_root)
