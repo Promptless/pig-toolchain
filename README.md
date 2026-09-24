@@ -804,9 +804,9 @@ gh release create "native-$source_hash" --target "$reviewed_sha" \
 
 Verify the run's `headSha` equals `reviewed_sha` and its conclusion is `success`
 before downloading or publishing. The hash-addressed release is immutable: do not
-replace an existing release's artifacts. After the workflow exists on `main`, its
-manual `publish: true` mode is available for a source hash already safe to promote.
-Publishing is a separate maintainer action; neither a PR nor its CI run performs it.
+replace an existing release's artifacts. The workflow's manual trigger also builds
+and validates artifacts without publishing. Publishing is a separate maintainer
+action; neither a PR nor its CI run performs it.
 
 For a private artifact mirror, set compiler-only
 `PIG_NATIVE_RUNTIME_RELEASE_BASE_URL=https://mirror.example/releases/download`.

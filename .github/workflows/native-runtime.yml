@@ -3,11 +3,6 @@ name: Native managed runtime
 on:
   workflow_call:
   workflow_dispatch:
-    inputs:
-      publish:
-        description: Publish the source-matched native artifact and bundled compiler distributions
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -53,8 +48,6 @@ jobs:
   assemble:
     needs: freeze
     runs-on: ubuntu-22.04
-    outputs:
-      source-hash: ${{ steps.identity.outputs.source-hash }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v5
@@ -93,8 +86,6 @@ jobs:
           uv venv --python 3.11 /tmp/native-wheel
           uv pip install --python /tmp/native-wheel/bin/python dist/*.whl pytest
           /tmp/native-wheel/bin/python -m scripts.ci_native_runtime_smoke --bundle /tmp/native-wheel/lib/python3.11/site-packages/promptless_instruction_hub/native_runtime_bundle --complete --embedded
-      - id: identity
-        run: echo "source-hash=$(uv run python scripts/build_native_runtime.py source-hash)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: native-runtime-release
@@ -103,27 +94,3 @@ jobs:
             src/promptless_instruction_hub/native_runtime_bundle/native-runtime.json
             dist/*
           retention-days: 7
-
-  publish:
-    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
-    needs: assemble
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: native-runtime-release
-          path: release
-      - name: Publish immutable source-addressed release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          SOURCE_HASH: ${{ needs.assemble.outputs.source-hash }}
-          SOURCE_COMMIT: ${{ github.sha }}
-        run: >-
-          gh release create "native-$SOURCE_HASH"
-          --target "$SOURCE_COMMIT"
-          --title "Native host runtime $SOURCE_HASH"
-          --notes "Frozen platform bundles and compiler distributions for this runtime source hash."
-          release/native-runtime.zip release/dist/*
