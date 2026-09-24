@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Generic
 
-import yaml
-
 from promptless_instruction_hub.agent_skills import AgentSkillWarning, read_agent_skill
 from promptless_instruction_hub.assets import load_assets, validate_no_literal_secrets, validate_no_symlinks
 from promptless_instruction_hub.commands import read_command, validate_verbatim_command
@@ -16,6 +14,7 @@ from promptless_instruction_hub.errors import InstructionHubError
 from promptless_instruction_hub.hook_definitions import validate_hook_definition
 from promptless_instruction_hub.managed_skills import MANAGED_SKILL_SOURCES
 from promptless_instruction_hub.mcp_config import read_mcp_servers
+from promptless_instruction_hub.skills import read_skill
 from promptless_instruction_hub.models import (
     PIG_PLUGIN_ID,
     UPDATE_INSTRUCTION_HUB_SKILL_ID,
@@ -72,6 +71,7 @@ def validate_hub(hub_root: Path) -> ValidationResult[HubPluginDefinition]:
     _validate_managed_skill_reservations(plugins)
     stable_plugins = _resolve_stable_plugins(config, plugins, assets)
     _validate_commands(config, assets)
+    _validate_skills(config, assets)
     for target in config.targets:
         for plugin in stable_plugins:
             _validate_invocation_destinations(plugin, target)
@@ -122,6 +122,16 @@ def _validate_agent_skills(
     return tuple(warnings)
 
 
+def _validate_skills(config: HubConfig, assets: dict[str, LoadedAsset]) -> None:
+    for asset in assets.values():
+        if asset.type == "skill" and any(
+            asset.metadata.support[target].mode == "agent-skill"
+            or (asset.metadata.support[target].mode == "native" and target != "cursor")
+            for target in config.targets
+        ):
+            read_skill(asset)
+
+
 def _validate_commands(config: HubConfig, assets: dict[str, LoadedAsset]) -> None:
     for asset in sorted(assets.values(), key=lambda asset: asset.ref):
         if asset.type != "command":
@@ -166,7 +176,7 @@ def _validate_invocation_destinations(plugin: StablePlugin[HubPluginDefinition],
                 f"plugin {plugin.definition.id!r} ({target}): {directory}/{name} conflicts between {owners[destination_key]} and {asset.ref}"
             )
         owners[destination_key] = asset.ref
-        invocation_name = _authored_skill_name(asset, name) if asset.type == "skill" else name
+        invocation_name = read_skill(asset).name if asset.type == "skill" else name
         invocation_key = invocation_name.casefold()
         if invocation_key in invocation_owners:
             raise InstructionHubError(
@@ -178,27 +188,6 @@ def _validate_invocation_destinations(plugin: StablePlugin[HubPluginDefinition],
             raise InstructionHubError(
                 f"{asset.ref}: combined Codex plugin and skill name {plugin.definition.id}:{name} exceeds 64 characters"
             )
-
-
-def _authored_skill_name(asset: LoadedAsset, fallback: str) -> str:
-    """Skill frontmatter can alias a directory name in plugin invocation menus."""
-
-    path = asset.path
-    if path.is_dir():
-        path = next(child for child in sorted(path.iterdir()) if child.is_file() and child.name.lower() == "skill.md")
-    contents = path.read_text(encoding="utf-8")
-    if not contents.startswith("---\n"):
-        return fallback
-    lines = contents.splitlines()
-    closing = next((i for i, line in enumerate(lines[1:], 1) if line == "---"), None)
-    if closing is None:
-        return fallback
-    try:
-        metadata = yaml.safe_load("\n".join(lines[1:closing]))
-    except yaml.YAMLError as exc:
-        raise InstructionHubError(f"{asset.ref}: cannot read skill invocation name from malformed YAML") from exc
-    name = metadata.get("name") if isinstance(metadata, dict) else None
-    return name.strip() if isinstance(name, str) and name.strip() else fallback
 
 
 def _validate_mcp_assets(assets: dict[str, LoadedAsset]) -> None:
