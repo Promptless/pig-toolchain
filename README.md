@@ -750,6 +750,11 @@ Its matrix uses macOS 15 arm64/Intel, Ubuntu 22.04 x86_64, and Windows Server 20
 x86_64. This checks executable and shell contracts; live desktop qualification
 remains separate. Windows checks both PowerShell 5.1 and 7 plus Node's
 extensionless exec-form resolution.
+These runner versions are qualification environments, not minimum compatible OS
+versions. Older macOS and Windows releases, other glibc distributions and ABI
+versions, and additional architectures require separate qualification. Packaging
+a fixed native matrix narrows the platforms previously possible with a locally
+installed interpreter; there is no interpreter fallback for unqualified systems.
 
 #### Native artifact distribution
 
