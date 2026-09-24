@@ -65,7 +65,7 @@ class CollectionFixture:
 @pytest.fixture
 def collection(tmp_path: Path) -> Iterator[CollectionFixture]:
     hub = tmp_path / "hub"
-    init_hub(hub)
+    init_hub(hub, org="Acme")
     enable_trace_ingestion(hub)
     build_hub(hub)
     server = _FakeWorkerServer(policy=_policy_with(enabled_hosts=["codex", "claude", "claude-desktop", "cursor"]))
