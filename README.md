@@ -235,6 +235,15 @@ includes:
 The skill in this example must exist in `assets/skills/review-docs/`. Keep the
 required `plugins/pig.yaml` created by `pig init` in `stable_plugins`.
 
+Skill output uses `SKILL.md` on every skill target, including when the source
+filename is lowercase. Plain Markdown receives a name from the asset ID and a
+description from its title. Existing YAML frontmatter must provide a nonempty
+`name` and `description`; malformed, duplicate, or missing fields fail before
+build output changes. Names use 1–64 lowercase letters, digits, and hyphens,
+without leading, trailing, or consecutive hyphens; descriptions allow up to
+1,024 characters. Authored invocation aliases and host-specific fields are
+preserved, as are supporting files beside the skill.
+
 The compiler uses `marketplace.id` as the marketplace name and each plugin's
 `id` as its native name. It adds no prefix or suffix. IDs use lowercase letters,
 digits, and hyphens, with a letter or digit at each end. Plugin display names
