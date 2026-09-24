@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ..contracts import HookTraceContext, JsonValue, LifecycleEvent
-from .database import ADAPTER_VERSION, mapping, read_session, string
+from .database import ADAPTER_VERSION, database_path, mapping, read_session, string
 from ..storage import _atomic_write_text, _ledger_path, _try_lock_state_file, _unlock_state_file
 
 MAX_RECORD = 2 * 1024 * 1024
@@ -44,6 +44,23 @@ def transcript_glob() -> str:
 
 def _digest(value: JsonValue) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _database_revision() -> str | None:
+    """Invalidate completed traversal work after SQLite writes or checkpoints."""
+    path = database_path().resolve()
+    revision: list[JsonValue] = [str(path)]
+    for source in (path, path.with_name(path.name + "-wal")):
+        try:
+            stat = source.stat()
+        except FileNotFoundError:
+            revision.append(None)
+        except OSError:
+            # An unreadable source cannot justify skipping previously seen children.
+            return None
+        else:
+            revision.append([stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns])
+    return _digest(revision)
 
 
 def _fallback(path: Path | None) -> list[dict[str, JsonValue]]:
@@ -218,7 +235,12 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
     offsets = mapping(state.get("offsets"))
     retry_offsets = mapping(state.get("retry_offsets"))
     saved_pending = state.get("pending")
-    saved_completed = state.get("completed")
+    database_revision = _database_revision()
+    saved_completed = (
+        state.get("completed")
+        if database_revision is not None and database_revision == state.get("database_revision")
+        else None
+    )
     resumed = [key for key in saved_pending if isinstance(key, str)] if isinstance(saved_pending, list) else []
     completed = {key for key in saved_completed if isinstance(key, str)} if isinstance(saved_completed, list) else set()
     after = string(state.get("after")) or ""
@@ -318,6 +340,7 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
                 "after": after,
                 "pending": remaining,
                 "completed": sorted(completed) if pending else [],
+                "database_revision": database_revision,
             }
         ),
     )

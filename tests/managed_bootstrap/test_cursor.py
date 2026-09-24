@@ -629,6 +629,52 @@ def test_subagent_traversal_resumes_and_finishes_across_bounded_passes(
     assert [row["event"]["text"] for row in rows] == ["a", "b"]
 
 
+@pytest.mark.parametrize("checkpoint", [False, True])
+@pytest.mark.parametrize("change", ["message", "grandchild"])
+def test_completed_children_refresh_when_database_changes_between_passes(
+    database: sqlite3.Connection, checkpoint: bool, change: str
+) -> None:
+    children = [f"child-{index}" for index in range(32)]
+    put(database, "composerData:parent", {"fullConversationHeadersOnly": [], "subagentComposerIds": children})
+    for child in children:
+        put(database, "composerData:" + child, {"fullConversationHeadersOnly": [{"bubbleId": "a"}]})
+        put(database, f"bubbleId:{child}:a", {"type": 1, "text": "old"})
+    context = HookTraceContext(
+        session_id="parent",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    assert not cursor_capture.prepare_journals(context, "session_end").complete
+    if change == "message":
+        # Same-size updates without a composer change must invalidate the cache.
+        put(database, "bubbleId:child-0:a", {"type": 1, "text": "new"})
+    else:
+        put(
+            database,
+            "composerData:child-0",
+            {"fullConversationHeadersOnly": [{"bubbleId": "a"}], "subagentComposerIds": ["grandchild"]},
+        )
+        put(database, "composerData:grandchild", {"fullConversationHeadersOnly": [{"bubbleId": "a"}]})
+        put(database, "bubbleId:grandchild:a", {"type": 1, "text": "new descendant"})
+    if checkpoint:
+        database.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    for _ in range(4):
+        exported = cursor_capture.prepare_journals(context, "session_end")
+        if exported.complete:
+            break
+    assert exported.complete
+    journals = cursor_capture.spool_root() / "journals"
+    if change == "message":
+        rows = [json.loads(line) for line in (journals / "child-0.jsonl").read_text().splitlines()]
+        assert [row["event"]["text"] for row in rows] == ["old", "new"]
+    else:
+        assert "new descendant" in (journals / "grandchild.jsonl").read_text()
+
+
 def test_cursor_hooks_detach_slow_work_and_close_output_pipes(tmp_path: Path) -> None:
     node = shutil.which("node")
     if node is None:
