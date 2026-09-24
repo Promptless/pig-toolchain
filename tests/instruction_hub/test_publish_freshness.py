@@ -95,7 +95,7 @@ def test_publish_rejects_diverged_history_even_when_hub_source_matches(tmp_path:
     assert _git_output(repo, "ls-remote", "origin", "refs/heads/*") == published_refs
 
 
-@pytest.mark.parametrize("failed_command", ["fetch", "diff"])
+@pytest.mark.parametrize("failed_command", ["fetch", "diff", "merge-base"])
 def test_publish_fails_closed_when_source_check_fails(tmp_path: Path, failed_command: str) -> None:
     repo = _init_action_repo(tmp_path / "failed-check", targets=("claude",))
     published_refs = _git_output(repo, "ls-remote", "origin", "refs/heads/*")
@@ -118,6 +118,7 @@ def test_publish_fails_closed_when_source_check_fails(tmp_path: Path, failed_com
         repo,
         tmp_path / "output.txt",
         extra_env={
+            "GITHUB_ACTIONS": "true",
             "FAILED_COMMAND": failed_command,
             "REAL_GIT": real_git,
             "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",

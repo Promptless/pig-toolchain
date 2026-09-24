@@ -600,6 +600,35 @@ def test_action_publish_bumps_generated_plugin_version_when_assets_change(tmp_pa
     assert _git_output(repo, "rev-parse", "HEAD").strip() == first_source
 
 
+@pytest.mark.parametrize("ci_env", [{"GITHUB_ACTIONS": "true"}, {"GITLAB_CI": "true"}])
+@pytest.mark.parametrize("reset_kind", ["ancestor", "diverged"])
+def test_action_publish_skips_ci_commit_removed_from_source_branch(
+    tmp_path: Path, ci_env: dict[str, str], reset_kind: str
+) -> None:
+    repo = _init_action_repo(tmp_path / "publish-reset", targets=("gemini",))
+    first = _run_action(repo, tmp_path / "first.txt")
+    assert first.returncode == 0, first.stdout + first.stderr
+    retained = _git_output(repo, "rev-parse", "HEAD").strip()
+    (repo / "hub.yaml").write_text((repo / "hub.yaml").read_text().replace("version: 0.1.0", "version: 0.2.0"))
+    _git(repo, "add", "hub.yaml")
+    _git(repo, "commit", "-m", "discarded hub change")
+    discarded = _git_output(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "push", "origin", "main")
+    if reset_kind == "diverged":
+        retained = _git_output(repo, "commit-tree", f"{retained}^{{tree}}", "-p", retained, "-m", "replacement").strip()
+    _git(repo, "push", "--force", "origin", f"{retained}:refs/heads/main")
+    _git(repo, "checkout", "--detach", discarded)
+    before = _git_output(repo, "ls-remote", "origin", "refs/heads/*")
+
+    rerun = _run_action(repo, tmp_path / "rerun.txt", extra_env=ci_env)
+
+    assert rerun.returncode == 0, rerun.stdout + rerun.stderr
+    assert "no longer on source branch" in rerun.stdout
+    assert _git_output(repo, "ls-remote", "origin", "refs/heads/*") == before
+    assert _git_output(repo, "rev-parse", "HEAD").strip() == discarded
+    assert _git_output(repo, "status", "--short") == ""
+
+
 def test_action_publish_removes_legacy_promptless_release_metadata(tmp_path: Path) -> None:
     repo = _init_action_repo(tmp_path / "publish-cleans-legacy-release-metadata", targets=("claude",))
     first = _run_action(repo, tmp_path / "first.txt")

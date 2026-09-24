@@ -273,6 +273,15 @@ snapshot_publish_source() {
   restore_push_credentials
   [[ "$status" -eq 0 ]] || exit "$status"
   source_base="$(git -C "$repo_root" rev-parse "origin/$source_branch")"
+  if [[ "${GITHUB_ACTIONS:-}" == "true" || "${GITLAB_CI:-}" == "true" ]]; then
+    # CI reruns must not restore commits removed by a source-branch reset.
+    git -C "$repo_root" merge-base --is-ancestor HEAD "$source_base" || status=$?
+    if [[ "$status" -eq 1 ]]; then
+      echo "Checked-out CI commit is no longer on source branch '$source_branch'; skipping publication."
+      exit 0
+    fi
+    [[ "$status" -eq 0 ]] || exit "$status"
+  fi
   if git -C "$repo_root" merge-base --is-ancestor "$source_base" HEAD; then
     return
   fi

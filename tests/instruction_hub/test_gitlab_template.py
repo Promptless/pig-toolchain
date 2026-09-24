@@ -21,6 +21,7 @@ def _run_template_job(
         env={
             **os.environ,
             "GITHUB_ACTIONS": "false",
+            "GITLAB_CI": "true",
             "INPUT_GITHUB_TOKEN": "",
             "CI_PROJECT_DIR": str(repo),
             "CI_REPOSITORY_URL": str(repo.parent / "remote.git"),
