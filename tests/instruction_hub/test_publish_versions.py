@@ -5,13 +5,15 @@ import shutil
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from tests.config_helpers import enable_trace_ingestion
 
 from promptless_instruction_hub.compiler import build_hub, init_hub
-from promptless_instruction_hub.release.versions import resolve_publish_version
+from promptless_instruction_hub.release.versions import read_release_manifest, resolve_publish_version
 
 from .helpers import (
+    SCHEMAS,
     _configure_split_plugin_hub,
     _write_release_manifest_with_fresh_identity,
 )
@@ -150,7 +152,7 @@ def test_publish_version_reports_nested_authoritative_version_basis_path(tmp_pat
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
-        ("schema_version", r"hub\.release\.json: schema_version must be 2"),
+        ("schema_version", r"hub\.release\.json: schema_version must be 2, 3, or 4"),
         ("assets_object", r"hub\.release\.json: assets must be a list"),
         ("assets_empty", r"hub\.release\.json: assets refs must match version_basis plugin assets"),
         (
@@ -294,3 +296,48 @@ def test_publish_version_rejects_previous_release_without_manifest(tmp_path: Pat
 
     with pytest.raises(ValueError, match="previous release is missing its release manifest"):
         resolve_publish_version(hub_root, previous_release_root=previous_release_root)
+
+
+@pytest.mark.parametrize("schema_version", [2, 3])
+def test_publish_migrates_immutable_runtime_metadata(tmp_path: Path, schema_version: int) -> None:
+    hub_root = tmp_path / "hub"
+    init_hub(hub_root, org="Acme")
+    enable_trace_ingestion(hub_root)
+    build_hub(hub_root)
+    previous_root = tmp_path / "previous-release"
+    shutil.copytree(hub_root, previous_root)
+    manifest_path = previous_root / "hub.release.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["schema_version"] = schema_version
+    for runtimes in (manifest["managed_runtimes"], manifest["version_basis"]["managed_runtimes"]):
+        for runtime in runtimes:
+            runtime["package_id"] = runtime["plugin_id"]
+    _write_release_manifest_with_fresh_identity(manifest_path, manifest)
+    previous_bytes = manifest_path.read_bytes()
+
+    schema = json.loads((SCHEMAS / "release-manifest.schema.json").read_text())
+    Draft202012Validator(schema).validate(json.loads((hub_root / "hub.release.json").read_text()))
+    Draft202012Validator(schema).validate(json.loads(previous_bytes))
+    assert read_release_manifest(manifest_path)[0] == "0.1.0"
+    assert resolve_publish_version(hub_root, previous_release_root=previous_root) == "0.1.1"
+    assert manifest_path.read_bytes() == previous_bytes
+
+
+@pytest.mark.parametrize("schema_version", [2, 3, 4])
+def test_release_reader_rejects_runtime_metadata_for_another_schema(tmp_path: Path, schema_version: int) -> None:
+    init_hub(tmp_path)
+    enable_trace_ingestion(tmp_path)
+    build_hub(tmp_path)
+    manifest_path = tmp_path / "hub.release.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["schema_version"] = schema_version
+    if schema_version == 4:
+        for runtimes in (manifest["managed_runtimes"], manifest["version_basis"]["managed_runtimes"]):
+            for runtime in runtimes:
+                runtime["package_id"] = runtime["plugin_id"]
+    _write_release_manifest_with_fresh_identity(manifest_path, manifest)
+
+    schema = json.loads((SCHEMAS / "release-manifest.schema.json").read_text())
+    assert not Draft202012Validator(schema).is_valid(manifest)
+    with pytest.raises(ValueError, match="must contain exactly these keys"):
+        read_release_manifest(manifest_path)

@@ -138,8 +138,8 @@ def test_mixed_marketplaces_build_offline_without_external_payloads(
     }
     assert not list((tmp_path / "dist").glob("*/doc-detective"))
     manifest = json.loads((tmp_path / "hub.release.json").read_text())
-    assert manifest["schema_version"] == 3
-    assert json.loads((tmp_path / "hub.stable.json").read_text())["schema_version"] == 3
+    assert manifest["schema_version"] == 4
+    assert json.loads((tmp_path / "hub.stable.json").read_text())["schema_version"] == 4
     assert manifest["version_basis"]["plugins"][1] == {
         **definition,
         "source": {"type": "git", "url": UPSTREAM_URL, "sha": definition["source"]["ref"]},
@@ -190,7 +190,7 @@ def test_external_pins_participate_in_versioning_across_schema_migration(tmp_pat
     (hub / "hub.yaml").write_text(yaml.safe_dump(config))
     assert resolve_publish_version(hub, previous_release_root=previous) == "0.1.1"
     build_hub(hub)
-    assert json.loads((hub / "hub.release.json").read_text())["schema_version"] == 2
+    assert json.loads((hub / "hub.release.json").read_text())["schema_version"] == 4
 
 
 @pytest.mark.parametrize("mutation", ["legacy-schema", "bad-pin", "extra-field", "asset-injection"])

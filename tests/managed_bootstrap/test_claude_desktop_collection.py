@@ -30,7 +30,7 @@ from .helpers import (
     _json_string,
     _run_collect,
     _run_runtime_json,
-    _signed_policy,
+    _policy_response,
 )
 
 
@@ -57,7 +57,7 @@ def test_claude_desktop_discovers_both_audit_stores_under_platform_config_root(t
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/claude/pig"
-    server = _FakeWorkerServer(policy=_signed_policy(enabled_hosts=["codex", "claude"]))
+    server = _FakeWorkerServer(policy=_policy_response(enabled_hosts=["codex", "claude"]))
     server.start()
     try:
         home = tmp_path / "home"
@@ -120,7 +120,7 @@ def test_claude_uploads_current_transcript_before_idle_history(tmp_path: Path) -
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/claude/pig"
-    server = _FakeWorkerServer(policy=_signed_policy(enabled_hosts=["codex", "claude"]))
+    server = _FakeWorkerServer(policy=_policy_response(enabled_hosts=["codex", "claude"]))
     server.start()
     try:
         home = tmp_path / "home"
@@ -184,7 +184,7 @@ def test_claude_desktop_ensure_if_sources_skips_without_audit_files(tmp_path: Pa
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/claude/pig"
-    server = _FakeWorkerServer(policy=_signed_policy(enabled_hosts=["codex", "claude"]))
+    server = _FakeWorkerServer(policy=_policy_response(enabled_hosts=["codex", "claude"]))
     server.start()
     try:
         home = tmp_path / "home"
@@ -227,7 +227,7 @@ def test_claude_desktop_ensure_uses_shared_claude_enrollment_and_policy(tmp_path
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/claude/pig"
-    server = _FakeWorkerServer(policy=_signed_policy(enabled_hosts=["codex", "claude"]))
+    server = _FakeWorkerServer(policy=_policy_response(enabled_hosts=["codex", "claude"]))
     server.start()
     try:
         home = tmp_path / "home"
@@ -278,7 +278,7 @@ def test_claude_reset_clears_shared_and_legacy_desktop_enrollment_state(
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/claude/pig"
-    server = _FakeWorkerServer(policy=_signed_policy(enabled_hosts=["codex", "claude"]))
+    server = _FakeWorkerServer(policy=_policy_response(enabled_hosts=["codex", "claude"]))
     server.start()
     try:
         home = tmp_path / "home"
@@ -333,7 +333,7 @@ def test_claude_desktop_collect_skips_without_cached_credential(tmp_path: Path) 
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/claude/pig"
-    server = _FakeWorkerServer(policy=_signed_policy(enabled_hosts=["codex", "claude"]))
+    server = _FakeWorkerServer(policy=_policy_response(enabled_hosts=["codex", "claude"]))
     server.start()
     try:
         home = tmp_path / "home"
@@ -365,7 +365,7 @@ def test_claude_desktop_collect_uploads_audit_jsonl_ranges(tmp_path: Path) -> No
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/claude/pig"
-    server = _FakeWorkerServer(policy=_signed_policy(enabled_hosts=["codex", "claude"]))
+    server = _FakeWorkerServer(policy=_policy_response(enabled_hosts=["codex", "claude"]))
     server.start()
     try:
         home = tmp_path / "home"
@@ -399,7 +399,7 @@ def test_claude_desktop_collect_uploads_audit_jsonl_ranges(tmp_path: Path) -> No
         batch = server.trace_batches[0]
         assert batch["source"] == "claude-desktop"
         assert batch["host"] == "claude-desktop"
-        assert batch["collector_version"] == "0.3.0"
+        assert batch["collector_version"] == "0.4.0"
         chunks = _json_list(batch["chunks"], "batch.chunks")
         assert len(chunks) == 1
         chunk = _json_mapping(chunks[0], "batch.chunks[0]")
@@ -424,7 +424,7 @@ def test_claude_and_desktop_collections_share_one_offset_ledger(tmp_path: Path) 
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/claude/pig"
-    server = _FakeWorkerServer(policy=_signed_policy(enabled_hosts=["codex", "claude"]))
+    server = _FakeWorkerServer(policy=_policy_response(enabled_hosts=["codex", "claude"]))
     server.start()
     try:
         home = tmp_path / "home"
@@ -494,7 +494,7 @@ def test_concurrent_claude_collections_wait_for_shared_ledger_lock(tmp_path: Pat
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/claude/pig"
-    server = _FakeWorkerServer(policy=_signed_policy(enabled_hosts=["codex", "claude"]))
+    server = _FakeWorkerServer(policy=_policy_response(enabled_hosts=["codex", "claude"]))
     server.start()
     processes: list[subprocess.Popen[str]] = []
     try:
@@ -571,7 +571,7 @@ def test_claude_session_start_supervisor_collects_code_and_desktop(tmp_path: Pat
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/claude/pig"
-    server = _FakeWorkerServer(policy=_signed_policy(enabled_hosts=["codex", "claude"]))
+    server = _FakeWorkerServer(policy=_policy_response(enabled_hosts=["codex", "claude"]))
     server.start()
     try:
         home = tmp_path / "home"

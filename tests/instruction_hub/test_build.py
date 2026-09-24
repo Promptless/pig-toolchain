@@ -155,7 +155,7 @@ def test_build_emits_target_outputs_and_deterministic_manifests(tmp_path: Path) 
     assert set(release_manifest["target_hashes"]) == {"claude", "codex", "cursor", "gemini"}
     assert release_manifest["version_basis"]["target_hashes"] == release_manifest["target_hashes"]
     assert release_manifest["version_basis"]["managed_runtimes"] == release_manifest["managed_runtimes"]
-    assert {runtime["package_id"] for runtime in release_manifest["managed_runtimes"]} == {"pig"}
+    assert all("package_id" not in runtime for runtime in release_manifest["managed_runtimes"])
     assert {runtime["plugin_id"] for runtime in release_manifest["managed_runtimes"]} == {"pig"}
     assert {runtime["plugin_name"] for runtime in release_manifest["managed_runtimes"]} == {"PIG"}
     assert {asset["title"] for asset in release_manifest["assets"]} == {"Repository MCP Servers", "Review Docs"}

@@ -330,7 +330,7 @@ legacy fields and the old `packages/` directory with migration guidance.
    `includes`. Update custom CI path filters and scripts that reference the old
    directory or `pig init --plugin-id` / `--plugin-name` flags.
 3. Rename `plugin_version` to `version` in `hub.yaml` and use `--version`
-   instead of `--plugin-version` in scripts. Version 2 release manifests use
+   instead of `--plugin-version` in scripts. Release manifests use
    top-level `version`, `marketplace`, `stable_plugins`, and `version_basis.plugins`.
    Version 1 manifests are rejected. Coordinate a one-time rebuild of existing
    release artifacts with the source migration before resuming publication.
@@ -345,11 +345,11 @@ skill namespaces, choose explicit IDs such as `acme-dev` for customer plugins.
 The compiler never adds that prefix automatically. The managed PIG plugin
 continues to require the ID `pig`.
 
-`hub.release.json` and `hub.stable.json` share a schema version (2 for authored-only
-releases, 3 when external plugins are selected) and the same top-level `version`.
-Runtime enrollment metadata still uses `plugin_version`
-for the installed plugin's version and `package_id` for the source plugin ID.
-Runtime `plugin_id` matches the literal ID in the native plugin manifest.
+`hub.release.json` and `hub.stable.json` use schema version 4 and the same
+top-level `version`. Runtime enrollment metadata uses `plugin_version` for the
+installed plugin's version and `plugin_id` for its native plugin identity.
+Publish reads immutable schema 2 and 3 release manifests to calculate the next
+version without rewriting their recorded identities or hashes.
 
 ## Modes
 
@@ -550,10 +550,7 @@ Hubs follow the latest merged toolchain on `main`. GitHub callers use `@main`;
 GitLab callers use the `/main/` template URL and the default `toolchain-ref: main`.
 Resolved commit hashes in CI logs identify the compiler used for a build.
 
-Releases containing external plugins use manifest schema 3 and record their
-provenance in `version_basis.plugins`; authored-only releases use schema 2.
-The publisher accepts both. Upgrade older toolchains before consuming schema 3
-releases.
+Release manifests record external-plugin provenance in `version_basis.plugins`.
 
 The publisher stores verified upstream versions in release-side
 `hub.external.json`, bound to the release hash and exact source declarations.
@@ -741,6 +738,18 @@ runtime for a one-time per-host credential, caches that credential, and uses the
 host credential to fetch `/v0/host-enrollment/policy?target=...` and post
 `/v0/host-enrollment/check-ins`.
 
+The worker returns `{policy, is_internal_promptless_user}`. Policy schema 2
+contains organization and deployment identity, policy version, issue and expiry
+times, enabled hosts, and an optional minimum bootstrap version. The host runtime
+validates the schema, expiry, enabled host, and bootstrap minimum over the
+authenticated HTTPS connection.
+
+Host runtime 0.4.0 requires policy schema 2. Upgrade Runtime and the analyzer,
+publish plugins with this toolchain, and refresh installed PIG plugins in one
+maintenance window. Retain host credentials through the upgrade. Collection
+resumes when each host has refreshed its plugin; a schema 1 host runtime cannot
+consume schema 2 policies.
+
 SessionStart never waits for browser approval, worker requests, trace discovery,
 or the upload ledger. It launches one detached supervisor, emits and claims any
 already-pending plugin-update, first-enrollment, and internal-user notices using
@@ -859,8 +868,7 @@ exporter config for either host. Hosts configured by earlier managed bootstraps
 have that config removed on the next `ensure` run — the managed `[otel]` block
 in Codex `config.toml` and the marker-owned `OTEL_*`/telemetry env keys in
 Claude `settings.json` are deleted (with a timestamped backup), while unmanaged
-user config is never touched. The hosted policy's legacy `collector` section is
-ignored.
+user config is never touched.
 
 The host runtime has one executable entrypoint with subcommands. `session-start`
 detaches one `ensure`-then-collection supervisor. `ensure` enrolls when needed,
@@ -882,7 +890,6 @@ Python, Node, uv, Go, Rust, curl, jq, or other runtime/build dependencies instal
 for the hook to run. Customer builds should only consume the already-built
 Promptless artifact bundle that the toolchain copies into plugin `runtime/`.
 
-The dogfood runtime trusts the authenticated TLS worker response and validates
-only the hosted policy shape. The customer-grade static binary must verify an
-asymmetric hosted-policy signature with a pinned Promptless public key before it
-edits local host config.
+The runtime authenticates worker requests with the approved host credential and
+trusts the HTTPS policy response. It validates policy expiry and host eligibility
+before collecting traces or removing its managed host configuration.
