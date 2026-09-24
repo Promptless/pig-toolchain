@@ -1,0 +1,3 @@
+src/promptless_instruction_hub/managed_runtime_assets/** text eol=lf
+scripts/build_native_runtime.py text eol=lf
+scripts/ci_native_runtime_smoke.py text eol=lf

@@ -16,6 +16,9 @@ pig = "promptless_instruction_hub.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+artifacts = ["src/promptless_instruction_hub/native_runtime_bundle/**"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/promptless_instruction_hub"]
 
@@ -33,3 +36,4 @@ line-length = 120
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["native_runtime: exercise the production native artifact resolver without source-runtime injection"]

@@ -189,10 +189,8 @@ SourceEventKind = Literal["jsonl_range", "oversized_record"]
 OversizedReason = Literal["content_size", "transport_size"]
 
 
-# This bin runs under the host's own python3, which on macOS is the system Python 3.9
-# (/usr/bin/python3). Keep runtime-evaluated unions off the PEP 604 ``X | Y`` form (3.10+): these
-# aliases and the isinstance() in _json_value() are evaluated at import/call time, unlike annotations
-# (kept lazy by ``from __future__ import annotations``). Use typing.Union / isinstance tuples instead.
+# Keep the source runtime importable on Python 3.9 for isolated developer tests.
+# Customer plugins run the bundled Python 3.11 interpreter inside the native executable.
 JsonScalar = Union[str, int, float, bool, None]
 
 

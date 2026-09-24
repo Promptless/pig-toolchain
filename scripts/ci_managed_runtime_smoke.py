@@ -1,286 +1,25 @@
 #!/usr/bin/env python3
-"""Exercise packaged and generated managed-runtime bundles at CI boundaries."""
+"""Qualify cross-process runtime state locking on each native build platform.
+
+Frozen launchers and detached uploads are covered by ci_native_runtime_smoke.
+This source-only helper keeps the OS file-lock regression independently exercised.
+"""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib
-import json
-import os
 import subprocess
 import sys
-import tarfile
 import tempfile
 import time
-import zipfile
 from pathlib import Path
-from typing import Any, Sequence
 
-RUNTIME_ASSET_ROOT = "promptless_instruction_hub/managed_runtime_assets"
-HOST_ASSET_ROOT = f"{RUNTIME_ASSET_ROOT}/host_enrollment"
-RUNTIME_EXECUTABLE = "promptless-host-runtime"
-RUNTIME_PACKAGE = "promptless_host_runtime"
-RUNTIME_MODULES = (
-    "__init__.py",
-    "cli.py",
-    "contracts.py",
-    "cursor/__init__.py",
-    "cursor/capture.py",
-    "cursor/database.py",
-    "cursor/wire.py",
-    "enrollment.py",
-    "host_config.py",
-    "metadata.py",
-    "notices.py",
-    "output.py",
-    "redaction.py",
-    "status.py",
-    "storage.py",
-    "traces.py",
-    "validation.py",
-    "worker.py",
+ASSET_ROOT = (
+    Path(__file__).resolve().parents[1] / "src/promptless_instruction_hub/managed_runtime_assets/host_enrollment"
 )
-EXPECTED_ARCHIVE_ASSETS = {
-    f"{RUNTIME_ASSET_ROOT}/__init__.py",
-    f"{HOST_ASSET_ROOT}/__init__.py",
-    f"{HOST_ASSET_ROOT}/{RUNTIME_EXECUTABLE}",
-    f"{HOST_ASSET_ROOT}/cursor-hook.cjs",
-    *(f"{HOST_ASSET_ROOT}/{RUNTIME_PACKAGE}/{module}" for module in RUNTIME_MODULES),
-}
-EXPECTED_GENERATED_BUNDLE = {
-    RUNTIME_EXECUTABLE,
-    "cursor-hook.cjs",
-    *(f"{RUNTIME_PACKAGE}/{module}" for module in RUNTIME_MODULES),
-}
 
-
-def _run(
-    command: Sequence[os.PathLike[str] | str],
-    *,
-    cwd: Path,
-    env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        [os.fspath(part) for part in command],
-        cwd=cwd,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    if result.returncode != 0:
-        rendered = " ".join(os.fspath(part) for part in command)
-        raise AssertionError(
-            f"command failed ({result.returncode}): {rendered}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
-    return result
-
-
-def _json_output(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
-    value = json.loads(result.stdout)
-    if not isinstance(value, dict):
-        raise AssertionError(f"expected a JSON object, got: {value!r}")
-    return value
-
-
-def _archive_names(artifact: Path) -> list[str]:
-    if artifact.suffix == ".whl":
-        with zipfile.ZipFile(artifact) as archive:
-            return archive.namelist()
-    with tarfile.open(artifact, mode="r:gz") as archive:
-        return archive.getnames()
-
-
-def _normalized_runtime_assets(names: Sequence[str]) -> set[str]:
-    normalized: set[str] = set()
-    marker = f"{RUNTIME_ASSET_ROOT}/"
-    for name in names:
-        marker_index = name.find(marker)
-        if marker_index >= 0:
-            normalized.add(name[marker_index:])
-    return normalized
-
-
-def _assert_artifact_contents(artifact: Path) -> None:
-    names = _archive_names(artifact)
-    runtime_assets = _normalized_runtime_assets(names)
-    if runtime_assets != EXPECTED_ARCHIVE_ASSETS:
-        missing = sorted(EXPECTED_ARCHIVE_ASSETS - runtime_assets)
-        unexpected = sorted(runtime_assets - EXPECTED_ARCHIVE_ASSETS)
-        raise AssertionError(
-            f"managed-runtime contents differ in {artifact.name}; missing={missing}, unexpected={unexpected}"
-        )
-    cached = [name for name in names if "__pycache__" in name.split("/") or name.endswith(".pyc")]
-    if cached:
-        raise AssertionError(f"cached Python files were packaged in {artifact.name}: {cached}")
-
-
-def _environment_executable(environment: Path, name: str) -> Path:
-    if os.name == "nt":
-        return environment / "Scripts" / f"{name}.exe"
-    return environment / "bin" / name
-
-
-def _installed_version(python: Path, cwd: Path) -> str:
-    result = _run(
-        [
-            python,
-            "-c",
-            "import importlib.metadata as m; print(m.version('promptless-instruction-hub'))",
-        ],
-        cwd=cwd,
-    )
-    return result.stdout.strip()
-
-
-def _build_hub(toolchain: Sequence[os.PathLike[str] | str], workspace: Path) -> Path:
-    hub_root = workspace / "hub"
-    _run([*toolchain, "init", "--hub", hub_root, "--org", "Artifact Smoke"], cwd=workspace)
-    config_path = hub_root / "hub.yaml"
-    config_path.write_text(config_path.read_text().replace("enabled: false", "enabled: true"))
-    _run([*toolchain, "build", "--hub", hub_root], cwd=workspace)
-    plugin_root = hub_root / "dist" / "codex" / "pig"
-    if not plugin_root.is_dir():
-        raise AssertionError(f"installed toolchain did not build the Codex plugin at {plugin_root}")
-    for target in ("claude", "codex", "cursor"):
-        skill_path = hub_root / "dist" / target / "pig/skills/add-external-plugin/SKILL.md"
-        if not skill_path.is_file():
-            raise AssertionError(f"installed toolchain did not ship the external plugin authoring skill: {skill_path}")
-    return plugin_root
-
-
-def _bundle_sha256(bin_root: Path) -> str:
-    files = [bin_root / RUNTIME_EXECUTABLE, bin_root / "cursor-hook.cjs"]
-    files.extend(
-        path
-        for path in (bin_root / RUNTIME_PACKAGE).rglob("*")
-        if path.is_file() and "__pycache__" not in path.relative_to(bin_root).parts and path.suffix != ".pyc"
-    )
-    digest = hashlib.sha256()
-    for path in sorted(files, key=lambda candidate: candidate.relative_to(bin_root).as_posix()):
-        relative_path = path.relative_to(bin_root).as_posix()
-        digest.update(relative_path.encode())
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
-def _assert_generated_bundle(bin_root: Path) -> None:
-    actual = {
-        path.relative_to(bin_root).as_posix()
-        for path in bin_root.rglob("*")
-        if path.is_file() and "__pycache__" not in path.relative_to(bin_root).parts and path.suffix != ".pyc"
-    }
-    if actual != EXPECTED_GENERATED_BUNDLE:
-        missing = sorted(EXPECTED_GENERATED_BUNDLE - actual)
-        unexpected = sorted(actual - EXPECTED_GENERATED_BUNDLE)
-        raise AssertionError(f"generated runtime bundle differs; missing={missing}, unexpected={unexpected}")
-
-
-def _verify_generated_runtime(plugin_root: Path, runtime_python: Path, toolchain_version: str, workspace: Path) -> None:
-    bin_root = plugin_root / "runtime"
-    runtime = bin_root / RUNTIME_EXECUTABLE
-    _assert_generated_bundle(bin_root)
-
-    manifest = json.loads((plugin_root / "hub.managed-runtimes.json").read_text())
-    records = manifest.get("managed_runtimes")
-    if not isinstance(records, list) or len(records) != 1 or not isinstance(records[0], dict):
-        raise AssertionError(f"unexpected managed-runtime manifest: {manifest!r}")
-    record = records[0]
-    digest = _bundle_sha256(bin_root)
-    expected_record_values = {
-        "id": "host-runtime",
-        "status": "included",
-        "target": "codex",
-        "path": f"runtime/{RUNTIME_EXECUTABLE}",
-        "executable": RUNTIME_EXECUTABLE,
-        "toolchain_version": toolchain_version,
-        "sha256": digest,
-    }
-    for key, expected in expected_record_values.items():
-        if record.get(key) != expected:
-            raise AssertionError(f"manifest field {key!r}: expected {expected!r}, got {record.get(key)!r}")
-
-    home = workspace / "home"
-    home.mkdir()
-    runtime_env = os.environ.copy()
-    runtime_env.update(
-        {
-            "HOME": str(home),
-            "USERPROFILE": str(home),
-            "PLUGIN_ROOT": str(plugin_root),
-            "PYTHONNOUSERSITE": "1",
-            "PYTHONPATH": "",
-        }
-    )
-
-    def runtime_json(*arguments: str) -> dict[str, Any]:
-        result = _run([runtime_python, "-S", runtime, *arguments], cwd=workspace, env=runtime_env)
-        return _json_output(result)
-
-    version = runtime_json("version", "--json")
-    expected_version = {
-        "id": "host-runtime",
-        "name": RUNTIME_EXECUTABLE,
-        "version": record.get("version"),
-        "channel": record.get("channel"),
-        "sha256": digest,
-    }
-    if version != expected_version:
-        raise AssertionError(f"unexpected version payload: {version!r}")
-
-    status = runtime_json("status", "--host", "codex")
-    if status.get("status") != "ok" or status.get("host") != "codex":
-        raise AssertionError(f"unexpected status payload: {status!r}")
-    if status.get("runtime") != expected_version:
-        raise AssertionError(f"status reported different runtime metadata: {status.get('runtime')!r}")
-    state = status.get("state")
-    if not isinstance(state, dict) or state.get("exists") is not False:
-        raise AssertionError(f"fresh isolated status unexpectedly had state: {state!r}")
-
-    reset = runtime_json("reset", "--host", "codex", "--yes")
-    expected_reset = {
-        "status": "reset",
-        "host": "codex",
-        "credentials_removed": 0,
-        "pending_enrollments_removed": 0,
-    }
-    if reset != expected_reset:
-        raise AssertionError(f"unexpected reset payload: {reset!r}")
-    status_after_reset = runtime_json("status", "--host", "codex")
-    state_after_reset = status_after_reset.get("state")
-    if not isinstance(state_after_reset, dict) or state_after_reset.get("exists") is not True:
-        raise AssertionError(f"reset did not create valid isolated state: {state_after_reset!r}")
-
-    cached_files = [path for path in bin_root.rglob("*") if "__pycache__" in path.parts or path.suffix == ".pyc"]
-    if cached_files:
-        raise AssertionError(f"Python 3.9 -S execution polluted the generated bundle: {cached_files}")
-
-
-def _artifact_smoke(dist: Path, uv: Path, runtime_python: Path) -> None:
-    wheels = sorted(dist.glob("*.whl"))
-    sdists = sorted(dist.glob("*.tar.gz"))
-    if len(wheels) != 1 or len(sdists) != 1:
-        raise AssertionError(f"expected exactly one wheel and one sdist in {dist}, got {wheels + sdists}")
-
-    for artifact in (*wheels, *sdists):
-        _assert_artifact_contents(artifact)
-        with tempfile.TemporaryDirectory(prefix=f"runtime-{artifact.name}-") as temporary_directory:
-            workspace = Path(temporary_directory)
-            environment = workspace / "toolchain"
-            _run([uv, "venv", "--python", sys.executable, environment], cwd=workspace)
-            environment_python = _environment_executable(environment, "python")
-            _run([uv, "pip", "install", "--python", environment_python, artifact.resolve()], cwd=workspace)
-            toolchain = _environment_executable(environment, "pig")
-            if not toolchain.is_file():
-                raise AssertionError(f"artifact did not install the pig console entrypoint: {toolchain}")
-            toolchain_version = _installed_version(environment_python, workspace)
-            plugin_root = _build_hub([toolchain], workspace)
-            _verify_generated_runtime(plugin_root, runtime_python, toolchain_version, workspace)
-        print(f"validated release artifact: {artifact.name}")
+RUNTIME_PACKAGE = "promptless_host_runtime"
 
 
 def _wait_for_signal(path: Path, process: subprocess.Popen[str], timeout: float) -> None:
@@ -390,139 +129,18 @@ def _two_process_lock_smoke(bin_root: Path, runtime_python: Path, workspace: Pat
                 process.communicate(timeout=5)
 
 
-def _detach_launcher(bin_root: Path, started: Path, release: Path, captured_stdin: Path) -> None:
-    sys.path.insert(0, str(bin_root))
-    runtime_cli = importlib.import_module(f"{RUNTIME_PACKAGE}.cli")
-    spawn_detached = getattr(runtime_cli, "_spawn_detached")
-    spawn_detached(
-        [
-            sys.executable,
-            "-S",
-            str(Path(__file__).resolve()),
-            "_detach-child",
-            str(started),
-            str(release),
-            str(captured_stdin),
-        ],
-        stdin=sys.stdin.buffer,
-    )
-
-
-def _detach_child(started: Path, release: Path, captured_stdin: Path) -> None:
-    started.write_text("started\n")
-    deadline = time.monotonic() + 15
-    while not release.exists():
-        if time.monotonic() >= deadline:
-            raise AssertionError("detached child timed out waiting for release")
-        time.sleep(0.02)
-    captured_stdin.write_text(sys.stdin.read())
-
-
-def _detached_process_smoke(bin_root: Path, runtime_python: Path, workspace: Path) -> None:
-    started = workspace / "detached-started"
-    release = workspace / "detached-release"
-    captured_stdin = workspace / "detached-stdin"
-    input_text = "hook stdin remains available after launcher exit\n"
-    launcher = subprocess.run(
-        [
-            str(runtime_python),
-            "-S",
-            str(Path(__file__).resolve()),
-            "_detach-launcher",
-            str(bin_root),
-            str(started),
-            str(release),
-            str(captured_stdin),
-        ],
-        cwd=workspace,
-        input=input_text,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-        timeout=10,
-    )
-    if launcher.returncode != 0:
-        raise AssertionError(
-            f"detach launcher failed ({launcher.returncode})\nstdout:\n{launcher.stdout}\nstderr:\n{launcher.stderr}"
-        )
-    deadline = time.monotonic() + 10
-    while not started.exists():
-        if time.monotonic() >= deadline:
-            raise AssertionError("detached child did not start after launcher exit")
-        time.sleep(0.02)
-    if captured_stdin.exists():
-        raise AssertionError("detached child completed before its release signal")
-    release.write_text("release\n")
-    deadline = time.monotonic() + 10
-    while not captured_stdin.exists():
-        if time.monotonic() >= deadline:
-            raise AssertionError("detached child did not complete after launcher exit")
-        time.sleep(0.02)
-    if captured_stdin.read_text() != input_text:
-        raise AssertionError("detached child did not preserve launcher stdin")
-
-
-def _platform_smoke(runtime_python: Path, *, require_windows: bool) -> None:
-    if require_windows and os.name != "nt":
-        raise AssertionError(f"Windows lock smoke ran on os.name={os.name!r}")
-    with tempfile.TemporaryDirectory(prefix="runtime-platform-") as temporary_directory:
-        workspace = Path(temporary_directory)
-        toolchain_version = _installed_version(Path(sys.executable), workspace)
-        plugin_root = _build_hub([sys.executable, "-m", "promptless_instruction_hub.cli"], workspace)
-        _verify_generated_runtime(plugin_root, runtime_python, toolchain_version, workspace)
-        _two_process_lock_smoke(plugin_root / "runtime", runtime_python, workspace)
-        _detached_process_smoke(plugin_root / "runtime", runtime_python, workspace)
-    print(f"validated generated runtime, state lock, and detachment on os.name={os.name}")
-
-
-def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    subcommands = parser.add_subparsers(dest="command", required=True)
-
-    artifacts = subcommands.add_parser("artifacts", help="test installed wheel and sdist release boundaries")
-    artifacts.add_argument("--dist", type=Path, required=True)
-    artifacts.add_argument("--uv", type=Path, required=True)
-    artifacts.add_argument("--runtime-python", type=Path, required=True)
-
-    platform = subcommands.add_parser("platform", help="test generated runtime startup and cross-process locking")
-    platform.add_argument("--runtime-python", type=Path, required=True)
-    platform.add_argument("--require-windows", action="store_true")
-
-    for command in ("_lock-holder", "_lock-waiter"):
-        child = subcommands.add_parser(command, help=argparse.SUPPRESS)
-        child.add_argument("bin_root", type=Path)
-        child.add_argument("state_path", type=Path)
-        child.add_argument("signal_a", type=Path)
-        child.add_argument("signal_b", type=Path)
-    detach_launcher = subcommands.add_parser("_detach-launcher", help=argparse.SUPPRESS)
-    detach_launcher.add_argument("bin_root", type=Path)
-    detach_launcher.add_argument("started", type=Path)
-    detach_launcher.add_argument("release", type=Path)
-    detach_launcher.add_argument("captured_stdin", type=Path)
-    detach_child = subcommands.add_parser("_detach-child", help=argparse.SUPPRESS)
-    detach_child.add_argument("started", type=Path)
-    detach_child.add_argument("release", type=Path)
-    detach_child.add_argument("captured_stdin", type=Path)
-    return parser.parse_args(argv)
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    args = _parse_args(argv)
-    if args.command == "artifacts":
-        _artifact_smoke(args.dist.resolve(), args.uv.resolve(), args.runtime_python.resolve())
-    elif args.command == "platform":
-        _platform_smoke(args.runtime_python.resolve(), require_windows=args.require_windows)
-    elif args.command == "_detach-launcher":
-        _detach_launcher(args.bin_root, args.started, args.release, args.captured_stdin)
-    elif args.command == "_detach-child":
-        _detach_child(args.started, args.release, args.captured_stdin)
-    elif args.command == "_lock-holder":
-        _lock_child(args.bin_root, args.state_path, args.signal_a, args.signal_b, holder=True)
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", nargs="?", choices=("_lock-holder", "_lock-waiter"))
+    parser.add_argument("paths", nargs="*", type=Path)
+    args = parser.parse_args()
+    if args.command:
+        _lock_child(*args.paths, holder=args.command == "_lock-holder")
     else:
-        _lock_child(args.bin_root, args.state_path, args.signal_a, args.signal_b, holder=False)
-    return 0
+        with tempfile.TemporaryDirectory(prefix="pig-state-lock-") as temporary:
+            _two_process_lock_smoke(ASSET_ROOT, Path(sys.executable), Path(temporary))
+        print("validated exclusive cross-process state locking")
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

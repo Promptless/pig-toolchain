@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import shutil
+import ssl
 import subprocess
 import sys
 import threading
@@ -55,7 +56,7 @@ def _diagnostic_log_path(home: Path) -> Path:
 
 def _runtime_bundle_sha256(bin_root: Path) -> str:
     package_root = bin_root / HOST_RUNTIME_PACKAGE
-    files = [bin_root / HOST_RUNTIME_BIN, bin_root / "cursor-hook.cjs"]
+    files = [bin_root / HOST_RUNTIME_BIN]
     files.extend(
         path
         for path in package_root.rglob("*")
@@ -482,6 +483,7 @@ class _FakeWorkerServer:
         self,
         *,
         policy: dict[str, JsonValue] | None = None,
+        tls_context: ssl.SSLContext | None = None,
         poll_response: dict[str, JsonValue] | None = None,
         post_response: dict[str, JsonValue] | None = None,
         session_response: dict[str, JsonValue] | None = None,
@@ -518,8 +520,11 @@ class _FakeWorkerServer:
         _FakeWorkerHandler.drop_next_trace_response_after_commit = drop_next_trace_response_after_commit
         _FakeWorkerHandler.trace_watermarks = {}
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeWorkerHandler)
+        if tls_context is not None:
+            self._server.socket = tls_context.wrap_socket(self._server.socket, server_side=True)
         host, port = self._server.server_address
-        self.base_url = f"http://{host}:{port}"
+        scheme = "https" if tls_context is not None else "http"
+        self.base_url = f"{scheme}://{host}:{port}"
         self._thread = threading.Thread(target=self._server.serve_forever)
 
     def start(self) -> None:
@@ -731,7 +736,8 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
 
     def _base_url(self) -> str:
         host, port = self.server.server_address
-        return f"http://{host}:{port}"
+        scheme = "https" if isinstance(self.connection, ssl.SSLSocket) else "http"
+        return f"{scheme}://{host}:{port}"
 
     def _session_response_payload(self) -> dict[str, JsonValue]:
         payload = dict(self.session_response or _session_response())

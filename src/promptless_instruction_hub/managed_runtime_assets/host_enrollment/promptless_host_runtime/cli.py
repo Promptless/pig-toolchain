@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import errno
 import hashlib
 import json
@@ -10,10 +11,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 from typing import BinaryIO, cast
 from urllib.parse import urlencode
 
@@ -50,6 +51,7 @@ from .metadata import (
     _self_sha256,
     _worker_base_url,
 )
+from .native_bundle import self_command
 from .notices import (
     _claim_deferred_first_enrollment_success_notice,
     _claim_first_enrollment_success_notice,
@@ -67,7 +69,7 @@ from .output import (
 )
 from .redaction import _redact_text
 from .status import _reset_host_state, _status_payload
-from .storage import _atomic_write_text, _try_lock_state_file, _unlock_state_file
+from .storage import _atomic_write_text, _try_lock_state_file, _unlock_state_file, _state_path
 from .traces import (
     _hook_trace_context,
     _lifecycle_event,
@@ -79,6 +81,7 @@ from .validation import _json_mapping_or_empty, _requires_newer_bootstrap
 from .worker import _get_json, _post_check_in, _validate_signed_policy, _worker_url
 
 _MAX_CURSOR_PENDING = 4096
+_CURSOR_COLLECTOR_TIMEOUT_SECONDS = 120
 
 _WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 _WINDOWS_DETACHED_PROCESS = 0x00000008
@@ -88,6 +91,10 @@ def main(argv: list[str] | None = None) -> int:
     """Run the requested host-runtime command."""
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
+    if args.command == "cursor-hook":
+        return _launch_cursor_hook(args.lifecycle)
+    if args.command == "cursor-supervise":
+        return _supervise_cursor(args.lifecycle)
     if args.command == "cursor-notify":
         try:
             return _run_cursor_notify(_read_hook_context(), _lifecycle_event(args.lifecycle))
@@ -147,6 +154,14 @@ def main(argv: list[str] | None = None) -> int:
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=RUNTIME_EXECUTABLE, description="Promptless host runtime")
     subcommands = parser.add_subparsers(dest="command", required=True)
+    cursor_hook = subcommands.add_parser("cursor-hook", help=argparse.SUPPRESS)
+    cursor_hook.add_argument(
+        "--lifecycle", required=True, choices=("session_start", "stop", "session_end", "subagent_stop")
+    )
+    cursor_supervisor = subcommands.add_parser("cursor-supervise", help=argparse.SUPPRESS)
+    cursor_supervisor.add_argument(
+        "--lifecycle", required=True, choices=("session_start", "stop", "session_end", "subagent_stop")
+    )
     cursor_parser = subcommands.add_parser("cursor-notify", help=argparse.SUPPRESS)
     cursor_parser.add_argument(
         "--lifecycle", required=True, choices=("session_start", "stop", "session_end", "subagent_stop")
@@ -292,14 +307,80 @@ def _collection_exit_code(host: Host, result: CollectionResult) -> int:
     return int(host == "cursor" and result is CollectionResult.INCOMPLETE)
 
 
-def _run_cursor_notify(context: dict[str, JsonValue], lifecycle: LifecycleEvent) -> int:
-    """Persist a notification and coalesce detached collectors with a nonblocking lock."""
-    root = cursor_capture.spool_root()
-    queue = root / "pending"
-    queue.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if os.name != "nt":
-        os.nice(10)
-    # Hook payloads contain metadata only. Persist only fields consumed by our adapter.
+def _read_cursor_hook_input() -> bytes:
+    if sys.stdin.isatty():
+        return b""
+    # os.read avoids a daemon thread holding a buffered-reader lock during
+    # interpreter shutdown if a host leaves stdin open. No trace content is kept.
+    chunks: list[bytes] = []
+    errors: list[OSError] = []
+    descriptor = sys.stdin.fileno()
+
+    def read() -> None:
+        remaining = 65537
+        try:
+            while remaining:
+                block = os.read(descriptor, remaining)
+                if not block:
+                    break
+                chunks.append(block)
+                remaining -= len(block)
+        except OSError as exc:
+            errors.append(exc)
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    reader.join(timeout=0.18)
+    if reader.is_alive():
+        raise ValueError("cursor_hook_stdin_timeout")
+    if errors:
+        raise errors[0]
+    payload = b"".join(chunks)
+    if len(payload) > 65536:
+        raise ValueError("cursor_hook_input_too_large")
+    return payload
+
+
+def _launch_cursor_hook(lifecycle: str) -> int:
+    """Preserve bounded stdin and detach all network, enrollment, and SQLite work."""
+    try:
+        hook_input = _read_cursor_hook_input()
+        hook_input = json.dumps(_cursor_notification_context(_read_hook_context(hook_input))).encode()
+        with tempfile.TemporaryFile(mode="w+b") as preserved_stdin:
+            binary_stdin = cast(BinaryIO, preserved_stdin)
+            binary_stdin.write(hook_input)
+            binary_stdin.seek(0)
+            _spawn_detached(self_command(["cursor-supervise", "--lifecycle", lifecycle]), stdin=binary_stdin)
+    except (BootstrapError, OSError, ValueError) as exc:
+        _record_collector_failure("cursor", exit_code=None, error_code=_exception_error_code(exc))
+        return 1
+    return 0
+
+
+def _supervise_cursor(lifecycle: str) -> int:
+    try:
+        result = subprocess.run(
+            self_command(["cursor-notify", "--lifecycle", lifecycle]),
+            stdin=sys.stdin.buffer,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=_CURSOR_COLLECTOR_TIMEOUT_SECONDS,
+            check=False,
+        )
+        status = "completed" if result.returncode == 0 else "collector_failed"
+    except subprocess.TimeoutExpired:
+        status = "collector_timeout"
+    except OSError as exc:
+        _record_collector_failure("cursor", exit_code=None, error_code=_os_error_code(exc))
+        status = "collector_failed"
+    _atomic_write_text(
+        _state_path().with_name("cursor-launcher-status.json"),
+        json.dumps({"status": status, "observed_at": dt.datetime.now(dt.timezone.utc).isoformat()}),
+    )
+    return int(status != "completed")
+
+
+def _cursor_notification_context(context: dict[str, JsonValue]) -> dict[str, JsonValue]:
     allowed = (
         "conversation_id",
         "generation_id",
@@ -308,9 +389,17 @@ def _run_cursor_notify(context: dict[str, JsonValue], lifecycle: LifecycleEvent)
         "parent_conversation_id",
         "agent_id",
     )
-    payload: dict[str, JsonValue] = {
-        key: value for key in allowed if isinstance(value := context.get(key), str) and len(value) <= 4096
-    }
+    return {key: value for key in allowed if isinstance(value := context.get(key), str) and len(value) <= 4096}
+
+
+def _run_cursor_notify(context: dict[str, JsonValue], lifecycle: LifecycleEvent) -> int:
+    """Persist a notification and coalesce detached collectors with a nonblocking lock."""
+    root = cursor_capture.spool_root()
+    queue = root / "pending"
+    queue.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name != "nt":
+        os.nice(10)
+    payload = _cursor_notification_context(context)
     payload["lifecycle"] = lifecycle
     notification_id = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     queued_path = queue / (notification_id + ".json")
@@ -381,13 +470,7 @@ def _launch_detached_session_start(host: Host, *, if_sources: bool) -> int:
     plugin_root = _plugin_root()
     metadata = _load_runtime_metadata(plugin_root, host)
 
-    supervisor_args = [
-        sys.executable,
-        str(Path(sys.argv[0]).resolve()),
-        "session-start",
-        "--host",
-        host,
-    ]
+    supervisor_args = self_command(["session-start", "--host", host])
     if if_sources:
         supervisor_args.append("--if-sources")
     supervisor_args.append("--supervised")
@@ -513,11 +596,7 @@ def _launch_detached_collect(
     if if_sources and not _has_native_trace_sources(host):
         _emit({"status": "trace_upload_skipped", "reason": "no_sources", "host": host}, quiet=quiet)
         return 0
-    supervisor_args = [
-        sys.executable,
-        str(Path(sys.argv[0]).resolve()),
-        *collector_args,
-    ]
+    supervisor_args = self_command(collector_args)
     supervisor_args.append("--supervised")
     try:
         with tempfile.TemporaryFile(mode="w+b") as preserved_stdin:
@@ -532,11 +611,7 @@ def _launch_detached_collect(
 
 
 def _supervise_collect(host: Host, collector_args: list[str]) -> int:
-    process_args = [
-        sys.executable,
-        str(Path(sys.argv[0]).resolve()),
-        *collector_args,
-    ]
+    process_args = self_command(collector_args)
     try:
         result = subprocess.run(
             process_args,

@@ -699,38 +699,111 @@ data or change a worker deployment.
 When `trace_ingestion.enabled` is true, the toolchain owns Promptless-managed runtime artifacts that are injected into
 the canonical `pig` plugin, including the host runtime used by Codex, Claude,
 and Cursor lifecycle hooks. Other generated plugins receive no toolchain-managed
-runtime or lifecycle hooks. During dogfood, generated Codex hooks wrap the bundled
-stdlib-only Python runtime with POSIX shell checks. The stable executable in
-`runtime/` delegates to private sibling modules that separate CLI dispatch,
-enrollment, trace collection, host configuration, persistence, and output.
-Generated Claude hooks use Claude Code's exec-form hook so Windows installs do
-not need a POSIX shell; Node must be available to start the inline launcher.
-Claude and Codex SessionStart launchers start a detached supervisor that inherits the
-hook input and redirects background output away from the agent transcript. The
-Claude supervisor collects both Claude Code and any detected Claude Desktop
-sources.
-Claude and Codex startup launchers emit schema-safe diagnostics when the host cannot resolve the
-plugin root, a readable managed runtime bundle (the launcher plus its sibling
-package and CLI entry module), or Python 3.9+. Terminal lifecycle launchers stay
-quiet: they resolve a complete runtime bundle under the plugin root, fall back
-to a complete sibling installed version with the same runtime-bundle layout for
-the same plugin id when the recorded root is stale or incomplete, and exit 0
-with no output when no usable bundle exists.
+runtime or lifecycle hooks. Each telemetry plugin contains prebuilt executables for
+macOS arm64 and x86_64, Linux x86_64 with glibc, and Windows x86_64. Installed
+managed hooks do not require Python, Node, uv, or a compiler on the user's PATH.
+These are PyInstaller directory bundles containing Python 3.11 and its libraries;
+they still depend on the operating system's native libraries. Linux arm64, musl,
+and native Windows arm64 are not covered by this release matrix.
 
-Cursor hooks use a bundled Node launcher with a 250 ms timeout. The foreground
-only accepts bounded identity/path metadata and launches a detached process.
-Interpreter discovery, enrollment, SQLite reads, journaling, and uploads happen
-in the background. Cursor receives no collector output.
+Claude uses an exec-form hook. Its extensionless path selects the Unix launcher
+or the sibling Windows `.exe` through the host's Node/Bun process launcher.
+Codex has separate POSIX and Windows PowerShell commands. Cursor uses a bundled
+`.cmd` entrypoint through its POSIX shell or Windows PowerShell. Windows
+qualification reproduces Cursor 3.21.9's UTF-8 input pipeline and automatic
+PowerShell call operator for quoted hook paths; older host versions need qualification.
+The Unix launcher uses `/bin/sh` and `/usr/bin/uname` to choose its bundled binary.
+A missing or incomplete installed runtime requires refreshing or reinstalling
+the plugin; launchers do not search other cached plugin versions.
+
+All three hosts launch detached supervisors with closed background output pipes.
+The foreground accepts bounded hook metadata and does no network or trace
+collection work. Cursor additionally limits stdin waiting to 180 ms and limits
+its background collector to 120 seconds. Startup hooks allow 30 seconds for
+cold native startup; terminal hooks allow 3 seconds. The Claude supervisor
+collects both Claude Code and detected Claude Desktop sources.
+
+The native release workflow qualifies generated commands with an empty PATH,
+paths containing spaces and Unicode, actual detached uploads, and local HTTPS.
+Its matrix uses macOS 15 arm64/Intel, Ubuntu 22.04 x86_64, and Windows Server 2022
+x86_64. This checks executable and shell contracts; live desktop qualification
+remains separate. Windows checks both PowerShell 5.1 and 7 plus Node's
+extensionless exec-form resolution.
+
+#### Native artifact distribution
+
+Released compiler wheels and source distributions embed a complete native bundle.
+A source checkout, including the GitHub Action, downloads and caches a matching
+`native-runtime.zip` from the toolchain's GitHub release named
+`native-<runtime-source-sha256>`. The compiler checks the source digest, the
+complete platform inventory, every file digest, and the bundle digest before
+copying it into a plugin. It rejects unsafe archives, symlinks, incomplete
+releases, and stale artifacts. The frozen `version`/status digest check also
+validates the installed files. These integrity checks are not release signatures.
+
+The workflow `.github/workflows/native-runtime.yml` builds and tests each platform,
+assembles the complete archive, and tests a wheel built through its source
+distribution. Normal CI never publishes. Every runtime asset change must have its
+matching artifact published **before merging to `main`**, because source customers
+may follow `main`. This includes the initial rollout; merging first and publishing
+later leaves those builds unable to find the required artifact. The compiler fails
+with instructions instead of substituting a local interpreter.
+
+A maintainer can promote the `native-runtime-release` artifact from the fully
+successful CI run for the reviewed PR commit, without first registering a workflow
+on `main`. From a clean checkout of that exact commit:
 
 ```sh
-sh -c 'root=${PLUGIN_ROOT:-}; ...; find python3/python/py; run promptless-host-runtime session-start --host codex --detach'
-sh -c 'root=${PLUGIN_ROOT:-}; ...; find same-plugin sibling runtime if needed; run promptless-host-runtime collect --host codex --lifecycle stop --detach --quiet'
-sh -c 'root=${PLUGIN_ROOT:-}; ...; find same-plugin sibling runtime if needed; run promptless-host-runtime collect --host codex --lifecycle session_end --detach --quiet'
-node -e '... resolve ${CLAUDE_PLUGIN_ROOT}; find Python 3.9+; run promptless-host-runtime session-start --host claude --detach' '${CLAUDE_PLUGIN_ROOT}'
-node -e '... resolve ${CLAUDE_PLUGIN_ROOT}; find same-plugin sibling runtime if needed; run promptless-host-runtime collect --host claude --lifecycle session_end --detach --quiet' '${CLAUDE_PLUGIN_ROOT}'
+reviewed_sha=$(git rev-parse HEAD)
+source_hash=$(uv run python scripts/build_native_runtime.py source-hash)
+# Set reviewed_run_id to the successful CI run for reviewed_sha after reviewing its checks.
+gh run view "$reviewed_run_id" --json headSha,conclusion
+gh run download "$reviewed_run_id" --name native-runtime-release --dir /tmp/pig-native-release
+uv run python - <<'PY'
+from pathlib import Path
+from promptless_instruction_hub.native_runtime import extract_bundle, runtime_source_sha256
+from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.native_bundle import validate_bundle
+root = Path('/tmp/pig-native-release/validated')
+extract_bundle(Path('/tmp/pig-native-release/native-runtime.zip'), root)
+validate_bundle(root, source_sha256=runtime_source_sha256(), complete=True)
+PY
+gh release create "native-$source_hash" --target "$reviewed_sha" \
+  --title "Native host runtime $source_hash" \
+  --notes "Validated native artifacts for reviewed source $reviewed_sha." \
+  /tmp/pig-native-release/native-runtime.zip /tmp/pig-native-release/dist/*
 ```
 
-The dogfood host runtime uses `PROMPTLESS_WORKER_BASE_URL` or the default
+Verify the run's `headSha` equals `reviewed_sha` and its conclusion is `success`
+before downloading or publishing. The hash-addressed release is immutable: do not
+replace an existing release's artifacts. After the workflow exists on `main`, its
+manual `publish: true` mode is available for a source hash already safe to promote.
+Publishing is a separate maintainer action; neither a PR nor its CI run performs it.
+
+For a private artifact mirror, set compiler-only
+`PIG_NATIVE_RUNTIME_RELEASE_BASE_URL=https://mirror.example/releases/download`.
+The mirror must serve the same `native-<source-sha256>/native-runtime.zip` layout;
+the URL cannot contain credentials, a query, or a fragment. For offline builds,
+set `PIG_NATIVE_RUNTIME_DIR` to an extracted, validated bundle directory.
+This explicit local override may contain a subset of platforms for development;
+the generated runtime manifest records exactly that subset. Do not publish a
+partial development bundle as a cross-platform marketplace release.
+
+To build and exercise a local development artifact on a supported machine:
+
+```sh
+uv run --python 3.11 --with pyinstaller==6.22.0 --with certifi==2026.7.22 python scripts/build_native_runtime.py freeze --output /tmp/pig-native
+uv run python -m scripts.ci_native_runtime_smoke --bundle /tmp/pig-native
+PIG_NATIVE_RUNTIME_DIR=/tmp/pig-native uv run pig build --hub /path/to/hub
+```
+
+Runtime source and the pinned build recipe determine the source digest. Update
+`BUILD_RECIPE` when changing the freezer recipe or its pinned dependencies.
+The bundle includes Mozilla CA certificates and license notices. HTTPS keeps
+certificate and hostname validation enabled; explicit `SSL_CERT_FILE` or
+`SSL_CERT_DIR` settings retain control of custom trust roots. Without those
+overrides, bundled public roots supplement the default system/OpenSSL trust.
+
+The host runtime uses `PROMPTLESS_WORKER_BASE_URL` or the default
 production worker. It reads the worker's public `/healthz` identity, opens the
 hosted Promptless dashboard start URL, and listens on a loopback callback with a
 per-attempt state token for the approved session proof. It then polls the hosted
@@ -786,8 +859,8 @@ starts with idle catch-up.
 
 Hook timeouts cover the launcher, while collection runs in a detached process.
 Claude and Codex terminal hooks use a 3-second launcher budget, which also fits
-Codex's `SessionEnd` maximum. Their startup hooks use 30 seconds. All four
-Cursor lifecycle hooks use 250 ms.
+Codex's `SessionEnd` maximum. Startup hooks use 30 seconds. Cursor uses the
+same startup and terminal budgets.
 
 A collection follows this order:
 
@@ -872,14 +945,6 @@ credentials and pending enrollments while preserving the stable host id,
 last-seen plugin versions, and one internal welcome marker per installed
 marketplace version. `version` reports runtime metadata.
 
-Before the customer-grade release, replace the dogfood Python implementation
-with a static native binary built and versioned by Promptless, then bundled into
-the toolchain release. Customer Instruction Hub repositories should not need
-Python, Node, uv, Go, Rust, curl, jq, or other runtime/build dependencies installed
-for the hook to run. Customer builds should only consume the already-built
-Promptless artifact bundle that the toolchain copies into plugin `runtime/`.
-
-The dogfood runtime trusts the authenticated TLS worker response and validates
-only the hosted policy shape. The customer-grade static binary must verify an
-asymmetric hosted-policy signature with a pinned Promptless public key before it
-edits local host config.
+Hosted policy verification is unchanged: the runtime trusts the authenticated
+TLS worker response and validates the policy shape. Native packaging does not
+add asymmetric policy signatures.

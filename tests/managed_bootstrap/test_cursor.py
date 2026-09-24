@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -523,36 +522,34 @@ def test_pages_resume_before_terminal_and_child_hook_never_closes_parent(
 
 
 def test_cursor_hooks_detach_slow_work_and_close_output_pipes(tmp_path: Path) -> None:
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is required for Cursor hooks")
     hub = tmp_path / "hub"
-    init_hub(hub)
+    init_hub(hub, org="Acme")
     enable_trace_ingestion(hub)
     build_hub(hub)
     plugin = hub / "dist/cursor/pig"
     config = json.loads((plugin / "hooks/hooks.json").read_text())
     assert set(config["hooks"]) == {"sessionStart", "stop", "sessionEnd", "subagentStop"}
-    assert all(entries[-1]["timeout"] == 0.25 for entries in config["hooks"].values())
+    assert config["hooks"]["sessionStart"][-1]["timeout"] == 30
+    assert all(config["hooks"][name][-1]["timeout"] == 3 for name in ("stop", "sessionEnd", "subagentStop"))
     marker = tmp_path / "finished.json"
-    runtime = plugin / "runtime/promptless-host-runtime"
-    runtime.write_text(
-        "import json, pathlib, sys, time\nbody=json.load(sys.stdin)\ntime.sleep(0.8)\npathlib.Path("
-        + repr(str(marker))
-        + ").write_text(json.dumps(body))\n"
+    module = plugin / "runtime/promptless_host_runtime/cli.py"
+    # Keep the real launcher, supervisor, stdin pipe and detachment. Substitute
+    # only collection, whose latency must never keep hook stdout/stderr open.
+    module.write_text(
+        module.read_text().replace(
+            '    """Persist a notification and coalesce detached collectors with a nonblocking lock."""',
+            "    time.sleep(0.8)\n    from pathlib import Path\n    Path("
+            + repr(str(marker))
+            + ").write_text(json.dumps(context))\n    return 0",
+        )
     )
-    env = {
-        **os.environ,
-        "HOME": str(tmp_path),
-        "PATH": str(Path(shutil.which("python3")).parent) + os.pathsep + os.environ["PATH"],
-    }
     start = time.monotonic()
     result = subprocess.run(
-        [node, str(plugin / "runtime/cursor-hook.cjs"), "stop"],
+        [sys.executable, str(plugin / "runtime/promptless-host-runtime"), "cursor-hook", "--lifecycle", "stop"],
         input=json.dumps({"conversation_id": "session", "generation_id": "g", "prompt": "SECRET"}),
         capture_output=True,
         text=True,
-        env=env,
+        env={**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)},
         timeout=0.5,
         check=False,
     )
@@ -662,31 +659,24 @@ def test_journal_retains_complete_result_after_pruned_ui_fallback(database: sqli
         ("import time; time.sleep(30)", "collector_timeout"),
     ],
 )
-def test_detached_launcher_records_collector_outcome(tmp_path: Path, program: str, status: str) -> None:
+def test_detached_launcher_records_collector_outcome(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    program: str,
+    status: str,
+) -> None:
     """Crashes and watchdog kills produce only bounded metadata after detachment."""
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is required for Cursor hooks")
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    source = Path(cursor_capture.__file__).parents[2] / "cursor-hook.cjs"
-    hook = runtime / source.name
-    shutil.copyfile(source, hook)
-    (runtime / "promptless-host-runtime").write_text(program)
-    # Exercise the actual watchdog without waiting two minutes in the test.
-    preload = tmp_path / "timers.cjs"
-    preload.write_text(
-        "const original = global.setTimeout;\n"
-        "global.setTimeout = (fn, ms, ...args) => original(fn, ms === 120000 ? 200 : ms, ...args);\n"
-    )
-    result = subprocess.run(
-        [node, "--require", str(preload), str(hook), "stop", "--background", "e30="],
-        env={**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)},
-        capture_output=True,
-        timeout=10,
-        check=True,
-    )
-    assert not result.stdout and not result.stderr
+    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import cli
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(cli, "self_command", lambda arguments: [sys.executable, "-c", program])
+    monkeypatch.setattr(cli, "_CURSOR_COLLECTOR_TIMEOUT_SECONDS", 0.2)
+    hook_input = tmp_path / "stdin.json"
+    hook_input.write_text("{}")
+    with hook_input.open() as stream:
+        monkeypatch.setattr(cli.sys, "stdin", stream)
+        assert cli._supervise_cursor("stop") == int(status != "completed")
     diagnostic = json.loads((tmp_path / ".promptless/instruction-hub/cursor-launcher-status.json").read_text())
     assert diagnostic["status"] == status
     assert set(diagnostic) == {"status", "observed_at"}
