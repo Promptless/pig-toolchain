@@ -262,6 +262,23 @@ An unchanged rerun creates no commits. If only one branch needs a content change
 the other receives an empty recording commit so Git checks both leases. Merely
 writing the resolved version back does not cause another version bump.
 
+### MCP transports
+
+MCP assets use `command` for local stdio servers and `url` with `type: http` or
+`type: sse` for remote servers. A URL without a type defaults to HTTP; specify
+`sse` explicitly for an SSE endpoint. Gemini's `httpUrl` input is also accepted
+as HTTP. Declare exactly one connection field, and keep `type` and `transport`
+consistent if both are present.
+
+The compiler emits the connection fields each host expects: Claude and Codex
+receive explicit remote types, Cursor receives `url`, and Gemini receives
+`httpUrl` for HTTP or `url` for SSE. Other server settings are preserved; their
+host-specific semantics, including environment interpolation, are not converted.
+Codex does not support SSE. Restrict an SSE asset's target support or provide a
+Codex-only HTTP definition with the same server name. Target-specific definitions
+override shared definitions before transport validation. WebSocket transport
+(`type: ws`) is supported only for Claude.
+
 ### External plugins
 
 A Hub can distribute upstream plugins for Claude, Codex, and Cursor. Set
