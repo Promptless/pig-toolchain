@@ -11,7 +11,7 @@
 pig.
 ```
 
-# Promptless Instruction Hub Toolchain
+# Promptless PIG Toolchain
 
 This repository is the canonical public toolchain for Promptless Instruction
 Hub repositories. It bundles the Python compiler and exposes reusable GitHub
@@ -44,7 +44,7 @@ permissions:
 
 jobs:
   instruction-hub:
-    uses: Promptless/instruction-hub-toolchain/.github/workflows/pr-check.yml@main
+    uses: Promptless/pig-toolchain/.github/workflows/pr-check.yml@main
 ```
 
 `.github/workflows/instruction-hub-publish.yml`:
@@ -67,7 +67,7 @@ concurrency:
 jobs:
   instruction-hub:
     if: github.ref == 'refs/heads/main'
-    uses: Promptless/instruction-hub-toolchain/.github/workflows/publish.yml@main
+    uses: Promptless/pig-toolchain/.github/workflows/publish.yml@main
     with:
       source-branch: main
 ```
@@ -113,7 +113,7 @@ For a hub at the repository root, add this to `.gitlab-ci.yml`:
 
 ```yaml
 include:
-  - remote: https://raw.githubusercontent.com/Promptless/instruction-hub-toolchain/main/templates/gitlab/instruction-hub.yml
+  - remote: https://raw.githubusercontent.com/Promptless/pig-toolchain/main/templates/gitlab/instruction-hub.yml
 ```
 
 The [template](templates/gitlab/instruction-hub.yml) validates and builds hub
@@ -144,7 +144,7 @@ For a pipeline with custom stages, use `include:inputs`:
 ```yaml
 stages: [verify, publish]
 include:
-  - remote: https://raw.githubusercontent.com/Promptless/instruction-hub-toolchain/main/templates/gitlab/instruction-hub.yml
+  - remote: https://raw.githubusercontent.com/Promptless/pig-toolchain/main/templates/gitlab/instruction-hub.yml
     inputs:
       check-stage: verify
       publish-stage: publish
@@ -177,7 +177,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: Promptless/instruction-hub-toolchain@main
+      - uses: Promptless/pig-toolchain@main
         with:
           mode: publish
           source-branch: main
@@ -248,10 +248,13 @@ required `plugins/pig.yaml` created by `pig init` in `stable_plugins`.
 The compiler uses `marketplace.id` as the marketplace name and each plugin's
 `id` as its native name. It adds no prefix or suffix. IDs use lowercase letters,
 digits, and hyphens, with a letter or digit at each end. Plugin display names
-come from `name` where the target supports them. Output goes to
+come from `name` where the target supports them. Authored plugin output goes to
 `dist/{target}/{plugin.id}/`. Gemini receives extensions with the same plugin
 IDs; it has no generated marketplace manifest.
 
+`pig init` requires `--org` with your organization's name; there is no default
+organization. Empty or whitespace-only names are rejected before any files are
+created, and surrounding whitespace is trimmed.
 `pig init --org Acme` defaults to marketplace ID `acme-instruction-hub` and
 display name `Acme Instruction Hub`. Override those with `--marketplace-id` and
 `--marketplace-name`. `version` is the hub release version shared by all compiled
@@ -271,6 +274,56 @@ branches. Publish requires committed source files and a clean index.
 An unchanged rerun creates no commits. If only one branch needs a content change,
 the other receives an empty recording commit so Git checks both leases. Merely
 writing the resolved version back does not cause another version bump.
+
+### External plugins
+
+A Hub can distribute upstream plugins for Claude, Codex, and Cursor. Set
+`source.ref` to a full 40-character commit SHA for a fixed pin, or `"latest"`
+to follow the upstream default branch when the Hub publishes.
+
+```yaml
+# plugins/doc-detective.yaml
+kind: external
+id: doc-detective
+name: Doc Detective
+source:
+  type: git
+  url: https://github.com/doc-detective/agent-tools.git
+  ref: "latest"
+targets:
+  claude:
+    path: plugins/doc-detective
+  codex:
+    path: plugins/doc-detective
+  cursor:
+    path: plugins/doc-detective
+```
+
+Add the ID to `hub.yaml`'s `stable_plugins`. It must match the upstream manifest's
+`name`. Declare only targets the upstream supports; paths are relative to its
+repository, with `.` for a plugin at the root.
+
+Verify the upstream plugin and local build:
+
+```bash
+pig resolve-external --hub .
+pig verify --hub .
+```
+
+For `"latest"`, commit the generated `hub.external-plugins.lock.json` alongside
+the definition. Offline builds use this lock; CI build and publish modes refresh
+it. Catalog definitions use `ref`; locks, release provenance, and marketplaces
+use the resolved `sha`. Consumers update installed plugins through their host.
+
+The generated PIG plugin includes an
+[`add-external-plugin` skill](src/promptless_instruction_hub/managed_skill_assets/add-external-plugin/shared/SKILL.md)
+with instructions for verification, updates, rollback, private repositories,
+and host compatibility.
+
+When an authored plugin replaces an external Claude plugin, the resolved Hub
+release version must differ from the previous upstream version. If the automatic
+bump collides, choose a higher version with
+`pig set-version --hub . --version <new-version>` before publishing.
 
 ### Migrating existing hubs
 
@@ -302,8 +355,9 @@ skill namespaces, choose explicit IDs such as `acme-dev` for customer plugins.
 The compiler never adds that prefix automatically. The managed PIG plugin
 continues to require the ID `pig`.
 
-`hub.release.json` and `hub.stable.json` both use `schema_version: 2` and the
-same top-level `version`. Runtime enrollment metadata still uses `plugin_version`
+`hub.release.json` and `hub.stable.json` share a schema version (2 for authored-only
+releases, 3 when external plugins are selected) and the same top-level `version`.
+Runtime enrollment metadata still uses `plugin_version`
 for the installed plugin's version and `package_id` for the source plugin ID.
 Runtime `plugin_id` matches the literal ID in the native plugin manifest.
 
@@ -364,6 +418,138 @@ Every generated plugin embeds local metadata as root files inside each plugin:
 - `hub.managed-runtimes.json`: Promptless-managed runtime metadata for plugins
   that include managed-runtime artifacts.
 
+### Portable commands
+
+Keep an explicitly invoked workflow as `command:<id>` in a plugin's `includes`.
+Author it in `assets/commands/<id>.md`:
+
+```markdown
+---
+description: Rebase the current PR onto main and report the result.
+---
+
+Fetch the latest main, rebase the current PR branch, and resolve conflicts.
+```
+
+The compiler preserves the asset ID and the complete procedure. It chooses the
+target's format and registers exactly one entry:
+
+| Target | Generated file | Invocation control |
+| --- | --- | --- |
+| Codex | `skills/<id>/SKILL.md` | `agents/openai.yaml` sets `policy.allow_implicit_invocation: false` |
+| Claude | `skills/<id>/SKILL.md` | Frontmatter sets `disable-model-invocation: true` |
+| Cursor | `skills/<id>/SKILL.md` | Frontmatter sets `disable-model-invocation: true` |
+| Gemini | `commands/<id>.toml` | Native slash command |
+
+For example, Codex gets `rebase-pr`, with its normal plugin namespace, instead of
+the `source-command-rebase-pr` name produced by Codex's legacy command importer.
+No additional Markdown command is emitted alongside a converted skill.
+Release metadata still records `command:rebase-pr` as the source asset.
+
+Commands without a `support` table default to native delivery on all hub targets.
+An explicit table is an allowlist: omitted targets remain unsupported. Existing
+`mode: native` command declarations now select conversion; explicit
+`mode: unsupported` exclusions remain effective. For example:
+
+```yaml
+# assets/commands/rebase-pr.asset.yaml
+support:
+  claude:
+    mode: native
+  codex:
+    mode: native
+  cursor:
+    mode: native
+  gemini:
+    mode: unsupported
+    reason: Not enabled for this workflow.
+```
+
+Portable command frontmatter requires a nonempty `description` of at most 1,024
+characters without angle-bracket invocation syntax. Optional `name` must match
+the asset ID. Names are limited to 64 characters; Codex's combined
+`plugin-id:command-id` must also fit that limit. Optional
+`disable-model-invocation` and `user-invocable` must be `true`: commands always
+require explicit invocation. Use a skill asset for automatic selection.
+
+Claude conversion also preserves `argument-hint`, `$ARGUMENTS`, `$ARGUMENTS[N]`,
+and `$N`. Other targets reject these fields and substitutions. Portable workflows
+can instead describe how to use the context supplied with the invocation. The
+compiler rejects unsupported frontmatter, including `allowed-tools`, `model`,
+and `context`, and host-specific dynamic context syntax such as shell injection,
+Gemini `{{args}}` / `@{...}`, and Claude path variables. It does not silently drop
+permissions, tool restrictions, subagent behavior, or template expansion.
+
+For a command that needs host-specific features, set that target to
+`mode: verbatim`. This copies a single native `.md` file for Claude/Cursor or a
+native `.toml` file for Gemini, including its metadata and substitutions. Gemini
+TOML must contain a nonempty `prompt` string. Codex has no native command format
+in this contract; author a Codex skill asset for features outside conversion.
+Directory command bundles are not supported by conversion or verbatim delivery.
+The existing `projected` mode remains an inert Markdown projection, not a
+registered, executable command.
+
+Validation rejects command/skill invocation collisions within each plugin,
+including converted agents and compiler-managed skills. Before adopting this
+compiler, remove redundant command wrappers whose names already belong to a
+skill, or give the workflows distinct names. Native files that previously used
+`mode: native` and require unsupported syntax must switch to `mode: verbatim`.
+After publishing, refresh the installed plugin and reload the harness to replace
+cached command imports.
+
+These adapters follow the documented invocation controls for
+[Codex skills](https://developers.openai.com/codex/skills),
+[Claude skills](https://code.claude.com/docs/en/skills),
+[Cursor skills](https://cursor.com/docs/skills), and
+[Gemini custom commands](https://geminicli.com/docs/cli/custom-commands/).
+Artifact checks validate file formats, names, registration, and invocation
+settings; installation, command-picker behavior, and refresh still need testing
+in each supported harness version.
+
+### Agent definitions as Codex skills
+
+An agent can ship as a native Claude subagent and a Codex skill from the same
+Markdown source. Set its adjacent `<id>.asset.yaml` file to:
+
+```yaml
+support:
+  claude:
+    mode: native
+  codex:
+    mode: agent-skill
+```
+
+Keep the `agent:<id>` reference in the plugin's `includes` list. The compiler
+writes `skills/<id>/SKILL.md` into the Codex plugin and registers it as a skill.
+Release metadata retains the source agent identity. Conversion is opt-in,
+Codex-only, and accepts `.md` files; directory-based agents are not converted.
+
+The generated skill contains the full authored procedure and instructions to
+delegate it to one child. An assigned specialist executes the procedure directly
+without delegating the same role again. The parent relays clarification questions
+and answers, then returns the result. If subagent tools are unavailable, the
+instructions require stopping. The model must follow these instructions; Codex has
+no documented skill frontmatter that enforces subagent execution. See the
+[Codex skill documentation](https://developers.openai.com/codex/skills).
+
+Source frontmatter must have a nonempty `description` of at most 1,024 characters.
+Use a shared portable description and put invocation examples in the body. The
+generated skill name is the asset ID. Optional `name`, `model`, and `color` fields
+are accepted; the generated skill omits model and color settings and tells the
+parent to launch the child without model or reasoning overrides.
+
+`tools` and `disallowedTools` accept comma-separated strings or YAML lists.
+They become advisory instructions with their original tool names; the compiler
+does not map names between hosts. An empty `tools` list means the specialist
+must not use tools. `pig validate`, `pig verify`, and `pig build` print one warning
+per included converted agent that declares either field. Codex does not enforce
+these restrictions through skill metadata. Write required behavior in the shared
+procedure without claiming that a host enforces it.
+
+Conversion rejects other frontmatter fields, invalid descriptions, and skill
+destination collisions, including names reserved for compiler-managed skills.
+The compiler does not truncate descriptions or rewrite procedures.
+
 The old `.promptless/instruction-hub.yaml` and generated `.promptless/...`
 layout is not read or migrated by this toolchain. Existing hubs must rename
 their config to `hub.yaml` and regenerate output with `pig build`.
@@ -373,6 +559,115 @@ their config to `hub.yaml` and regenerate output with `pig build`.
 Hubs follow the latest merged toolchain on `main`. GitHub callers use `@main`;
 GitLab callers use the `/main/` template URL and the default `toolchain-ref: main`.
 Resolved commit hashes in CI logs identify the compiler used for a build.
+
+Releases containing external plugins use manifest schema 3 and record their
+provenance in `version_basis.plugins`; authored-only releases use schema 2.
+The publisher accepts both. Upgrade older toolchains before consuming schema 3
+releases.
+
+The publisher stores verified upstream versions in release-side
+`hub.external.json`, bound to the release hash and exact source declarations.
+Version comparisons use this record even if the old repository is unavailable.
+Releases without this record require fetching the old pin.
+
+## Authored hooks
+
+Register `hook:<id>` in a plugin's includes. Keep its Python script and one
+`asset.yaml` declaration in `assets/hooks/<id>/`. For example:
+
+```yaml
+support:
+  claude: {mode: native}
+  codex: {mode: native}
+  cursor: {mode: native}
+hook:
+  entrypoint: run.py
+  timeout: 75
+  status_message: Checking credentials
+  bindings:
+    claude:
+      - {event: PostToolUseFailure, matcher: Bash}
+    codex:
+      - {event: PostToolUse, matcher: Bash}
+    cursor:
+      - {event: postToolUseFailure, matcher: Shell}
+```
+
+The compiler generates the native JSON, plugin-root paths, Python 3.9+ prerequisite
+check, and a shared input/output adapter. No installed toolchain package is needed
+on the user's machine. Generated launchers use a POSIX shell. Entrypoints must be existing `.py` files inside the bundle;
+unknown fields, invalid bindings, and conflicting definitions fail validation.
+Changing the declaration changes the asset's content hash and release identity.
+
+Bindings deliberately name native events: the compiler does not guess equivalent
+triggers across harnesses. The portable adapter supports Claude's `SessionStart`,
+`PostToolUse`, and `PostToolUseFailure`; Codex's `SessionStart` and `PostToolUse`;
+and Cursor's `sessionStart`, `postToolUse`, and `postToolUseFailure`.
+Bindings must cover exactly the targets marked `native` for this asset.
+
+Scripts read one JSON object on stdin:
+
+```json
+{
+  "event": "tool_result",
+  "cwd": "/workspace/repo",
+  "shell": {
+    "command": "python helper.py",
+    "output": "command output",
+    "exit_code": 1,
+    "status": "failed"
+  }
+}
+```
+
+`event` is `session_start` or `tool_result`. `shell` is null for startup and
+non-shell tools. Its status is `success`, `failed`, `unknown`, `running`,
+`cancelled`, `timeout`, or `permission_denied`. A missing exit code stays null;
+in particular, Codex can emit raw output with an `unknown` status. Hooks must not
+assume that unknown means failed. Cursor uses its reported cwd, falling back to
+its first workspace root. A missing working directory remains null.
+
+Emit `{"context": "Message for the agent"}` on stdout, or leave stdout empty to
+stay quiet. Use stderr for diagnostics. The adapter wraps context in the native
+response envelope and preserves a nonzero script exit. Scripts execute in the
+adapter's process, so cancellation signals reach their handlers directly. The
+adapter does not retry commands, start background workers, or infer recovery
+policy; those decisions belong to the hook script.
+
+### Native JSON escape hatch
+
+For other events, runtimes, or host features, keep `hooks.<target>.json` and shared
+scripts in the bundle instead of declaring `hook:` in `asset.yaml`. A shared
+`hooks.json` is used when the target-specific file is absent. Mixing a portable
+declaration with native JSON in one bundle is rejected; separate bundles can mix
+freely within a plugin. Existing single-file JSON hooks and other legacy native
+files remain supported.
+
+The compiler copies bundles to `hooks/<id>/` and combines selected configurations
+at `hooks/hooks.json`, appending handlers in asset-reference order, joining
+descriptions, and rejecting conflicting top-level metadata. Native JSON must
+contain a `hooks` object whose event values are arrays of handler objects. PIG's
+managed lifecycle hooks are appended afterward when ingestion is enabled; other
+plugins receive only their own hooks.
+
+### Hub-owned behavioral tests
+
+The shared PR workflow supports an optional test job. Configure it in the hub's
+existing workflow alongside `hub-root`; keep the tests with their source assets:
+
+```yaml
+with:
+  hub-root: .
+  test-command: python -m unittest discover -s tests -v
+  test-runs-on: macos-latest
+  test-python-version: "3.9"
+```
+
+With no `test-command`, no test job runs. The default runner is `ubuntu-latest`
+and the default Python version is `3.9`. The toolchain owns checkout, interpreter
+setup, execution, and failure propagation. The hub owns the command and test
+requirements; add its test paths to the workflow's PR filters. Test commands are
+trusted repository code, run without persisted checkout credentials.
 
 ## Managed PIG Assets
 
@@ -402,8 +697,10 @@ Verification and publishing do not require worker credentials or worker access.
 
 Omitting `trace_ingestion` or `enabled` also disables ingestion. Existing hubs
 that use ingestion must explicitly set `enabled: true`. Enabling ingestion
-bundles the existing Claude/Codex host runtime; it does not
-provision a worker. Cursor and Gemini do not receive that managed runtime.
+bundles the Claude, Codex, and Cursor host runtime; it does not provision a
+worker. Gemini does not receive that managed runtime. See the
+[Cursor collection guide](docs/cursor-trace-ingestion.md) for prerequisites,
+capture limits, and desktop qualification.
 
 After changing this setting, publish the hub and refresh its installed plugins.
 Disabling it removes managed hooks from the new release; an older installed
@@ -413,25 +710,30 @@ data or change a worker deployment.
 ### Managed Host Runtime
 
 When `trace_ingestion.enabled` is true, the toolchain owns Promptless-managed runtime artifacts that are injected into
-the canonical `pig` plugin, including the host runtime used by Codex and
-Claude lifecycle hooks. Other generated plugins receive no toolchain-managed
+the canonical `pig` plugin, including the host runtime used by Codex, Claude,
+and Cursor lifecycle hooks. Other generated plugins receive no toolchain-managed
 runtime or lifecycle hooks. During dogfood, generated Codex hooks wrap the bundled
 stdlib-only Python runtime with POSIX shell checks. The stable executable in
 `runtime/` delegates to private sibling modules that separate CLI dispatch,
 enrollment, trace collection, host configuration, persistence, and output.
 Generated Claude hooks use Claude Code's exec-form hook so Windows installs do
 not need a POSIX shell; Node must be available to start the inline launcher.
-Every SessionStart launcher starts one detached supervisor that inherits the
+Claude and Codex SessionStart launchers start a detached supervisor that inherits the
 hook input and redirects background output away from the agent transcript. The
 Claude supervisor collects both Claude Code and any detected Claude Desktop
 sources.
-Startup launchers emit schema-safe diagnostics when the host cannot resolve the
+Claude and Codex startup launchers emit schema-safe diagnostics when the host cannot resolve the
 plugin root, a readable managed runtime bundle (the launcher plus its sibling
 package and CLI entry module), or Python 3.9+. Terminal lifecycle launchers stay
 quiet: they resolve a complete runtime bundle under the plugin root, fall back
 to a complete sibling installed version with the same runtime-bundle layout for
 the same plugin id when the recorded root is stale or incomplete, and exit 0
 with no output when no usable bundle exists.
+
+Cursor hooks use a bundled Node launcher with a 250 ms timeout. The foreground
+only accepts bounded identity/path metadata and launches a detached process.
+Interpreter discovery, enrollment, SQLite reads, journaling, and uploads happen
+in the background. Cursor receives no collector output.
 
 ```sh
 sh -c 'root=${PLUGIN_ROOT:-}; ...; find python3/python/py; run promptless-host-runtime session-start --host codex --detach'
@@ -476,8 +778,9 @@ the worker commits one chunk per transaction; this keeps the request-level
 acknowledgement at the same atomic boundary.
 
 The runtime uploads native host transcript JSONL ranges to
-`/v0/traces/batches?target=...`. Claude Code, Codex, and Claude Desktop share one
-uploader and forward-only ledger. The ledger lives at
+`/v0/traces/batches?target=...`. Claude Code, Codex, Claude Desktop, and Cursor
+share one uploader and forward-only ledger. Cursor exports saved database
+observations to append-only JSONL journals before uploading. The ledger lives at
 `~/.promptless/instruction-hub/host-runtime-ledger.json` or
 `PROMPTLESS_HOST_RUNTIME_LEDGER` when set. Uploads use the host credential and
 are gated by the `enabled_hosts` policy. Codex idle discovery scans only
@@ -485,7 +788,7 @@ are gated by the `enabled_hosts` policy. Codex idle discovery scans only
 `CODEX_HOME/archived_sessions/**/*.jsonl`. Hook-provided current transcript
 paths remain eligible outside those roots.
 
-SessionStart hooks launch one quiet `ensure`-then-collection supervisor. They
+Claude and Codex SessionStart hooks launch one quiet `ensure`-then-collection supervisor. They
 include active files so pre-existing history is uploaded from byte zero when a
 source has no acknowledged offset. Terminal lifecycle hooks (`Stop`,
 `SessionEnd`, and `SubagentStop`) run collection only. Hook input accepts
@@ -493,6 +796,11 @@ snake_case, camelCase, and nested
 `session`/`transcript`/`agent` transcript references from Codex- and
 Claude-style hooks. Claude Desktop has no hook-provided current transcript and
 starts with idle catch-up.
+
+Hook timeouts cover the launcher, while collection runs in a detached process.
+Claude and Codex terminal hooks use a 3-second launcher budget, which also fits
+Codex's `SessionEnd` maximum. Their startup hooks use 30 seconds. All four
+Cursor lifecycle hooks use 250 ms.
 
 A collection follows this order:
 

@@ -5,20 +5,23 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Literal
+from pathlib import Path, PurePosixPath
+from typing import Annotated, Generic, Literal, TypeVar
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Harness = Literal["claude", "codex", "gemini", "cursor"]
+ExternalPluginHarness = Literal["claude", "codex", "cursor"]
 AssetKind = Literal["skill", "rule", "agent", "command", "hook", "mcp"]
-SupportMode = Literal["agent-skill", "native", "projected", "unsupported"]
+SupportMode = Literal["agent-skill", "native", "verbatim", "projected", "unsupported"]
 
 SUPPORTED_HARNESSES: tuple[Harness, ...] = ("claude", "codex", "gemini", "cursor")
 ASSET_KINDS: tuple[AssetKind, ...] = ("skill", "rule", "agent", "command", "hook", "mcp")
 PIG_PLUGIN_ID = "pig"
 PIG_PLUGIN_NAME = "PIG"
 UPDATE_INSTRUCTION_HUB_SKILL_ID = "update-instruction-hub"
+ADD_EXTERNAL_PLUGIN_SKILL_ID = "add-external-plugin"
 IDENTIFIER_PATTERN = r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
 IDENTIFIER_RE = re.compile(IDENTIFIER_PATTERN)
 SEMVER_RE = re.compile(
@@ -146,6 +149,7 @@ class PluginDefinition(BaseModel):
     name: str = Field(min_length=1)
     owners: list[str] = Field(default_factory=list)
     includes: list[str] = Field(default_factory=list)
+    kind: Literal["authored"] = "authored"
 
     @field_validator("id")
     @classmethod
@@ -163,6 +167,155 @@ class PluginDefinition(BaseModel):
         return [validate_asset_ref(asset_ref) for asset_ref in value]
 
 
+class HookBinding(BaseModel):
+    """An explicitly chosen native event and optional matcher."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    event: str = Field(min_length=1)
+    matcher: str | None = Field(default=None, min_length=1)
+
+
+class HookDefinition(BaseModel):
+    """Portable Python hook entrypoint with explicit native event bindings."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    entrypoint: str
+    timeout: int = Field(gt=0, le=86400)
+    status_message: str | None = Field(default=None, min_length=1)
+    bindings: dict[Harness, list[HookBinding]] = Field(min_length=1)
+
+    @field_validator("entrypoint")
+    @classmethod
+    def validate_entrypoint(cls, value: str) -> str:
+        path = PurePosixPath(value)
+        if path.is_absolute() or ".." in path.parts or "\\" in value or "\0" in value or path.suffix != ".py":
+            raise ValueError("hook entrypoint must be a relative .py path inside the bundle")
+        return value
+
+    @field_validator("bindings")
+    @classmethod
+    def require_bindings(cls, value: dict[Harness, list[HookBinding]]) -> dict[Harness, list[HookBinding]]:
+        if any(not entries for entries in value.values()):
+            raise ValueError("hook binding lists must not be empty")
+        return value
+
+
+class ExternalGitRepository(BaseModel):
+    """A portable upstream Git repository locator."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["git"]
+    url: str
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        """Keep repository locators portable and credentials out of catalogs."""
+
+        parts = urlsplit(value)
+        if (
+            parts.scheme != "https"
+            or not parts.hostname
+            or not parts.path.strip("/")
+            or parts.username is not None
+            or parts.password is not None
+            or parts.query
+            or parts.fragment
+            or any(character.isspace() or ord(character) < 32 for character in value)
+            or "\\" in value
+        ):
+            raise ValueError(
+                "external source url must be an HTTPS repository URL without credentials, query or fragment"
+            )
+        return value
+
+
+CommitSha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+
+
+class RequestedGitSource(ExternalGitRepository):
+    """A catalog request for a fixed commit or the upstream default-branch tip."""
+
+    ref: CommitSha | Literal["latest"]
+
+
+class ResolvedGitSource(ExternalGitRepository):
+    """An immutable commit used by locks, releases, and plugin hosts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    sha: CommitSha
+
+
+class ExternalPluginTarget(BaseModel):
+    """The installable upstream plugin directory for one host."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        """Accept a repository root or a canonical relative POSIX directory."""
+
+        if value == ".":
+            return value
+        if (
+            not value
+            or any(part in {"", ".", ".."} for part in value.split("/"))
+            or any(character != " " and (character.isspace() or ord(character) < 32) for character in value)
+            or "\\" in value
+            or ":" in value
+        ):
+            raise ValueError("external target path must be '.' or a relative POSIX directory without traversal")
+        return value
+
+
+class ExternalPluginMetadata(BaseModel):
+    """Upstream plugin identity and target paths shared by requests and resolutions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["external"]
+    id: str
+    name: str = Field(min_length=1)
+    owners: list[str] = Field(default_factory=list)
+    targets: dict[ExternalPluginHarness, ExternalPluginTarget] = Field(min_length=1)
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        """Reserve PIG for the Hub's locally generated lifecycle integration."""
+
+        validate_identifier(value, "plugin id")
+        if value == PIG_PLUGIN_ID:
+            raise ValueError("the required pig plugin must be authored locally")
+        return value
+
+
+class ExternalPluginDefinition(ExternalPluginMetadata):
+    """An upstream plugin declaration in the user-authored catalog."""
+
+    source: RequestedGitSource
+
+
+class ResolvedExternalPluginDefinition(ExternalPluginMetadata):
+    """An upstream plugin with an immutable source, ready for build or verification."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: ResolvedGitSource
+
+
+HubPluginDefinition = PluginDefinition | ExternalPluginDefinition
+ResolvedHubPluginDefinition = PluginDefinition | ResolvedExternalPluginDefinition
+PluginDefinitionT = TypeVar(
+    "PluginDefinitionT", bound=HubPluginDefinition | ResolvedHubPluginDefinition, covariant=True
+)
+
+
 class AssetMetadata(BaseModel):
     """Optional per-asset metadata stored next to source content."""
 
@@ -173,6 +326,13 @@ class AssetMetadata(BaseModel):
     title: str | None = None
     source_path: str | None = None
     support: dict[Harness, TargetSupport] = Field(default_factory=dict)
+    hook: HookDefinition | None = None
+
+    @model_validator(mode="after")
+    def require_hook_asset(self) -> "AssetMetadata":
+        if self.hook is not None and self.type != "hook":
+            raise ValueError("hook declarations are only supported on hook assets")
+        return self
 
     @field_validator("id")
     @classmethod
@@ -208,10 +368,10 @@ class LoadedAsset(BaseModel):
 
 
 @dataclass(frozen=True)
-class StablePlugin:
-    """Resolved stable plugin and the assets to render into its plugin payload."""
+class StablePlugin(Generic[PluginDefinitionT]):
+    """Selected plugin at the requested or resolved stage, with its local assets."""
 
-    definition: PluginDefinition
+    definition: PluginDefinitionT
     assets: tuple[LoadedAsset, ...]
 
 

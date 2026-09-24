@@ -17,6 +17,11 @@ from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptles
     cli as host_runtime_cli,
 )
 
+from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
+    CollectionResult,
+    Host,
+)
+
 from .helpers import (
     BUNDLE_LOAD_ERROR,
     FIRST_SUCCESS_ACTIVE_FRAGMENT,
@@ -39,9 +44,42 @@ from .helpers import (
 )
 
 
+@pytest.mark.parametrize(
+    ("host", "result", "expected_exit"),
+    [
+        ("cursor", CollectionResult.COMPLETE, 0),
+        ("cursor", CollectionResult.INCOMPLETE, 1),
+        ("codex", CollectionResult.COMPLETE, 0),
+        ("codex", CollectionResult.INCOMPLETE, 0),
+        ("claude", CollectionResult.COMPLETE, 0),
+        ("claude", CollectionResult.INCOMPLETE, 0),
+        ("claude-desktop", CollectionResult.COMPLETE, 0),
+        ("claude-desktop", CollectionResult.INCOMPLETE, 0),
+    ],
+)
+def test_collection_outcome_preserves_command_exit_behavior(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    host: Host,
+    result: CollectionResult,
+    expected_exit: int,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(host_runtime_cli, "_run_collect", lambda *args, **kwargs: result)
+    monkeypatch.setattr(host_runtime_cli, "_read_hook_context", lambda: {})
+
+    assert host_runtime_cli.main(["collect", "--host", host, "--quiet"]) == expected_exit
+    assert (
+        host_runtime_cli._run_session_start_collect(
+            host, hook_context=host_runtime_cli._hook_trace_context({}), if_sources=False
+        )
+        == expected_exit
+    )
+
+
 def test_host_runtime_requires_subcommand_and_reports_version(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/codex/pig"
@@ -76,7 +114,7 @@ def test_host_runtime_requires_subcommand_and_reports_version(tmp_path: Path) ->
     )
     assert payload["id"] == "host-runtime"
     assert payload["name"] == HOST_RUNTIME_BIN
-    assert payload["version"] == "0.2.9"
+    assert payload["version"] == "0.3.0"
     assert payload["channel"] == "stable"
     manifest = json.loads((plugin_root / "hub.managed-runtimes.json").read_text())
     bundle_sha256 = _runtime_bundle_sha256(plugin_root / "runtime")
@@ -108,7 +146,7 @@ def test_host_runtime_requires_subcommand_and_reports_version(tmp_path: Path) ->
         check=False,
     )
     assert text_version.returncode == 0
-    assert text_version.stdout == f"{HOST_RUNTIME_BIN} 0.2.9\n"
+    assert text_version.stdout == f"{HOST_RUNTIME_BIN} 0.3.0\n"
     assert text_version.stderr == ""
 
     poison_root = tmp_path / "poison-pythonpath"
@@ -136,7 +174,7 @@ def test_host_runtime_requires_subcommand_and_reports_version(tmp_path: Path) ->
         check=False,
     )
     assert poisoned_pythonpath.returncode == 0
-    assert json.loads(poisoned_pythonpath.stdout)["version"] == "0.2.9"
+    assert json.loads(poisoned_pythonpath.stdout)["version"] == "0.3.0"
     assert poisoned_pythonpath.stderr == ""
     assert not poison_marker.exists()
 

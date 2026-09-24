@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import io
 import json
 import shutil
-import sys
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from promptless_instruction_hub.cli import main
 from promptless_instruction_hub.compiler import build_hub, init_hub
-from promptless_instruction_hub.mcp_status import STATUS_TOOL_NAME, run_status_mcp
-from promptless_instruction_hub.scan.hub import scan_hub
 
+from .external_helpers import external_definition, write_external
 from .helpers import (
     FIXTURES,
     SCHEMAS,
@@ -24,15 +22,13 @@ from .helpers import (
 def test_reusable_workflows_run_caller_pinned_toolchain_ref(workflow_name: str) -> None:
     workflow_text = (WORKFLOWS / workflow_name).read_text()
 
-    assert "Promptless/instruction-hub-toolchain@v0" not in workflow_text
-    assert (
-        f"EXPECTED_WORKFLOW_PREFIX: Promptless/instruction-hub-toolchain/.github/workflows/{workflow_name}@"
-    ) in workflow_text
+    assert "Promptless/pig-toolchain@v0" not in workflow_text
+    assert (f"EXPECTED_WORKFLOW_PREFIX: Promptless/pig-toolchain/.github/workflows/{workflow_name}@") in workflow_text
     assert "JOB_WORKFLOW_REF: ${{ job.workflow_ref }}" in workflow_text
-    assert "repository: Promptless/instruction-hub-toolchain" in workflow_text
+    assert "repository: Promptless/pig-toolchain" in workflow_text
     assert "ref: ${{ steps.toolchain-ref.outputs.ref }}" in workflow_text
-    assert "path: .promptless-instruction-hub-toolchain" in workflow_text
-    assert "uses: ./.promptless-instruction-hub-toolchain" in workflow_text
+    assert "path: .promptless-pig-toolchain" in workflow_text
+    assert "uses: ./.promptless-pig-toolchain" in workflow_text
 
 
 def test_cli_init_scan_verify_build_validate_and_status(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -56,51 +52,11 @@ def test_empty_hub_fixture_bootstraps(tmp_path: Path) -> None:
     hub_root = tmp_path / "empty-hub"
     shutil.copytree(FIXTURES / "empty-hub", hub_root)
 
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     result = build_hub(hub_root)
 
     assert result.asset_count == 0
     assert (hub_root / "hub.release.json").exists()
-
-
-def test_status_mcp_returns_invalid_request_errors(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(sys, "stdin", io.StringIO("[]\n"))
-
-    run_status_mcp(tmp_path / "missing-release.json")
-
-    response = json.loads(capsys.readouterr().out)
-    assert response["error"]["code"] == -32600
-    assert response["error"]["message"] == "JSON-RPC request must be an object"
-
-
-def test_status_mcp_reports_release_metadata_without_git_commit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    hub_root = tmp_path / "hub"
-    init_hub(hub_root)
-    scan_hub(hub_root, FIXTURES / "dogfood-source")
-    build_hub(hub_root)
-    request = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {"name": STATUS_TOOL_NAME, "arguments": {}},
-    }
-    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(request) + "\n"))
-
-    run_status_mcp(hub_root / "hub.release.json")
-
-    response = json.loads(capsys.readouterr().out)
-    status = json.loads(response["result"]["content"][0]["text"])
-    assert status["release_hash"]
-    assert status["version"] == "0.1.0"
-    assert "git_commit" not in status
 
 
 def test_release_manifest_schema_matches_generated_contract() -> None:
@@ -169,3 +125,57 @@ def test_instruction_hub_schema_requires_non_empty_lists() -> None:
     assert schema["properties"]["stable_plugins"]["contains"] == {"const": "pig"}
     assert schema["properties"]["stable_plugins"]["default"] == ["pig"]
     assert schema["properties"]["targets"]["minItems"] == 1
+
+
+def test_optional_hub_tests_keep_command_and_platform_in_caller_configuration() -> None:
+    import os
+    import subprocess
+    import yaml
+
+    workflow = yaml.safe_load((WORKFLOWS / "pr-check.yml").read_text())
+    job = workflow["jobs"]["hub-tests"]
+    assert job["if"] == "${{ inputs.test-command != '' }}"
+    assert job["runs-on"] == "${{ inputs.test-runs-on }}"
+    assert job["steps"][0]["with"]["persist-credentials"] is False
+    assert job["steps"][1]["with"]["python-version"] == "${{ inputs.test-python-version }}"
+    step = job["steps"][2]
+    assert step["working-directory"] == "${{ inputs.hub-root }}"
+    assert step["env"]["HUB_TEST_COMMAND"] == "${{ inputs.test-command }}"
+    # Run the actual workflow shell step; a failing hub suite must fail the CI job.
+    result = subprocess.run(["bash", "-c", step["run"]], env={**os.environ, "HUB_TEST_COMMAND": "exit 23"})
+    assert result.returncode == 23
+
+
+@pytest.mark.parametrize("plugin_path", [None, ".", "plugins/doc-detective", "plugins/Doc Detective"])
+def test_generated_release_validates_against_shipped_schema(tmp_path: Path, plugin_path: str | None) -> None:
+    init_hub(tmp_path, org="Promptless")
+    if plugin_path is not None:
+        write_external(tmp_path, external_definition(path=plugin_path))
+    build_hub(tmp_path)
+    schema = json.loads((SCHEMAS / "release-manifest.schema.json").read_text())
+    Draft202012Validator.check_schema(schema)
+    release = json.loads((tmp_path / "hub.release.json").read_text())
+    Draft202012Validator(schema).validate(release)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "",
+        "../plugin",
+        "/plugin",
+        "x/../plugin",
+        "x//plugin",
+        "./plugin",
+        "C:/plugin",
+        "x\\y",
+        "plugins/review\tdocs",
+        "plugins/review\ndocs",
+        "plugins/review\x00docs",
+        "plugins/review\u00a0docs",
+        "plugins/review docs\n",
+    ],
+)
+def test_external_target_schema_rejects_unsafe_paths(path: str) -> None:
+    schema = json.loads((SCHEMAS / "release-manifest.schema.json").read_text())
+    assert not Draft202012Validator(schema["$defs"]["external_target"]).is_valid({"path": path})

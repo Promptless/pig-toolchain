@@ -7,6 +7,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from promptless_instruction_hub.agent_skills import AgentSkillWarning
 from promptless_instruction_hub.config import (
     CONFIG_PATH,
     PLUGIN_DIR,
@@ -16,12 +17,14 @@ from promptless_instruction_hub.config import (
     load_plugins,
 )
 from promptless_instruction_hub.errors import BuildCheckFailedError
+from promptless_instruction_hub.external_lock import load_external_resolutions
 from promptless_instruction_hub.fs import JsonValue, replace_tree, trees_equal, write_yaml
 from promptless_instruction_hub.models import (
     PIG_PLUGIN_ID,
     PIG_PLUGIN_NAME,
     HubConfig,
     MarketplaceDefinition,
+    ResolvedHubPluginDefinition,
     TraceIngestionConfig,
 )
 from promptless_instruction_hub.release.manifests import build_release_manifest, write_release_files
@@ -57,6 +60,7 @@ class BuildResult:
     target_count: int
     asset_count: int
     checked: bool
+    warnings: tuple[AgentSkillWarning, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -67,17 +71,22 @@ class VerifyResult:
     release_hash: str
     target_count: int
     asset_count: int
+    warnings: tuple[AgentSkillWarning, ...] = ()
 
 
 def init_hub(
     hub_root: Path,
     *,
-    org: str = "Promptless",
+    org: str,
     marketplace_id: str | None = None,
     marketplace_name: str | None = None,
     version: str = "0.1.0",
 ) -> Path:
     """Initialize an empty customer-owned Instruction Hub repository."""
+
+    org = org.strip()
+    if not org:
+        raise ValueError("organization must not be empty or whitespace-only")
 
     root = hub_root.resolve()
     if (root / CONFIG_PATH).exists():
@@ -117,7 +126,7 @@ def build_hub(hub_root: Path, *, check: bool = False, version: str | None = None
     """Build generated target artifacts and manifests, or check that they are current."""
 
     root = hub_root.resolve()
-    validation = validate_hub(root)
+    validation = load_external_resolutions(root, validate_hub(root))
     if version is not None:
         validation = _with_version(validation, version)
     with tempfile.TemporaryDirectory(prefix="promptless-instruction-hub-") as temp_dir:
@@ -133,13 +142,14 @@ def build_hub(hub_root: Path, *, check: bool = False, version: str | None = None
         target_count=len(validation.config.targets),
         asset_count=len(validation.stable_assets),
         checked=check,
+        warnings=validation.warnings,
     )
 
 
 def verify_hub(hub_root: Path) -> VerifyResult:
     """Validate and fully compile an Instruction Hub without changing its worktree."""
 
-    validation = validate_hub(hub_root.resolve())
+    validation = load_external_resolutions(hub_root, validate_hub(hub_root.resolve()))
     with tempfile.TemporaryDirectory(prefix="promptless-instruction-hub-verify-") as temp_dir:
         release_manifest = _compile_hub(Path(temp_dir), validation)
     return VerifyResult(
@@ -147,10 +157,11 @@ def verify_hub(hub_root: Path) -> VerifyResult:
         release_hash=str(release_manifest["release_hash"]),
         target_count=len(validation.config.targets),
         asset_count=len(validation.stable_assets),
+        warnings=validation.warnings,
     )
 
 
-def _compile_hub(output_root: Path, validation: ValidationResult) -> dict[str, JsonValue]:
+def _compile_hub(output_root: Path, validation: ValidationResult[ResolvedHubPluginDefinition]) -> dict[str, JsonValue]:
     managed_runtimes = render_target_plugins(output_root, validation.config, validation.stable_plugins)
     release_manifest = build_release_manifest(output_root, validation, managed_runtimes)
     write_release_files(output_root, release_manifest)
@@ -176,13 +187,16 @@ def _replace_generated_output(hub_root: Path, output_root: Path) -> None:
         replace_tree(output_root / relative_path, hub_root / relative_path)
 
 
-def _with_version(validation: ValidationResult, version: str) -> ValidationResult:
+def _with_version(
+    validation: ValidationResult[ResolvedHubPluginDefinition], version: str
+) -> ValidationResult[ResolvedHubPluginDefinition]:
     config = HubConfig.model_validate({**validation.config.model_dump(), "version": version})
     return ValidationResult(
         config=config,
         plugins=validation.plugins,
         assets=validation.assets,
         stable_plugins=validation.stable_plugins,
+        warnings=validation.warnings,
     )
 
 

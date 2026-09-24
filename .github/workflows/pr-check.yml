@@ -13,8 +13,41 @@ on:
         required: false
         type: string
         default: build
+      test-command:
+        description: Optional hub-owned behavioral test command. Empty skips the test job.
+        required: false
+        type: string
+        default: ""
+      test-runs-on:
+        description: GitHub-hosted runner for the optional hub test job.
+        required: false
+        type: string
+        default: ubuntu-latest
+      test-python-version:
+        description: Python version for the optional hub test job.
+        required: false
+        type: string
+        default: "3.9"
 
 jobs:
+  hub-tests:
+    if: ${{ inputs.test-command != '' }}
+    runs-on: ${{ inputs.test-runs-on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.test-python-version }}
+      - name: Run hub tests
+        working-directory: ${{ inputs.hub-root }}
+        shell: bash
+        env:
+          HUB_TEST_COMMAND: ${{ inputs.test-command }}
+        run: bash -e -o pipefail -c "$HUB_TEST_COMMAND"
   instruction-hub:
     runs-on: ubuntu-latest
     steps:
@@ -25,7 +58,7 @@ jobs:
         id: toolchain-ref
         shell: bash
         env:
-          EXPECTED_WORKFLOW_PREFIX: Promptless/instruction-hub-toolchain/.github/workflows/pr-check.yml@
+          EXPECTED_WORKFLOW_PREFIX: Promptless/pig-toolchain/.github/workflows/pr-check.yml@
           JOB_WORKFLOW_REF: ${{ job.workflow_ref }}
         run: |
           set -euo pipefail
@@ -44,11 +77,11 @@ jobs:
           printf 'ref=%s\n' "$toolchain_ref" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          repository: Promptless/instruction-hub-toolchain
+          repository: Promptless/pig-toolchain
           ref: ${{ steps.toolchain-ref.outputs.ref }}
-          path: .promptless-instruction-hub-toolchain
+          path: .promptless-pig-toolchain
           persist-credentials: false
-      - uses: ./.promptless-instruction-hub-toolchain
+      - uses: ./.promptless-pig-toolchain
         with:
           mode: ${{ inputs.mode }}
           hub-root: ${{ inputs.hub-root }}

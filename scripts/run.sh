@@ -29,17 +29,30 @@ declare -a release_worktrees=()
 declare -a marketplace_pointer_paths=()
 declare -a temp_paths=()
 original_origin_url=""
+run_completed=false
 
 cleanup_temp_paths() {
-  set +u
-  for worktree_path in "${release_worktrees[@]}"; do
+  local status=$?
+  local cleanup_status=0
+  trap - EXIT
+  # Bash 3.2 can report zero here after a nounset abort. Require an explicit
+  # successful skip or completion of the final action output write.
+  if [[ "$status" -eq 0 && "$run_completed" != "true" ]]; then
+    status=1
+  fi
+  for worktree_path in ${release_worktrees[@]+"${release_worktrees[@]}"}; do
     if [[ -d "$worktree_path" ]]; then
-      git -C "$repo_root" worktree remove "$worktree_path" --force >/dev/null 2>&1 || rm -rf "$worktree_path"
+      git -C "$repo_root" worktree remove "$worktree_path" --force >/dev/null 2>&1 \
+        || rm -rf "$worktree_path" || cleanup_status=$?
     fi
   done
-  for temp_path in "${temp_paths[@]}"; do
-    rm -rf "$temp_path"
+  for temp_path in ${temp_paths[@]+"${temp_paths[@]}"}; do
+    rm -rf "$temp_path" || cleanup_status=$?
   done
+  if [[ "$status" -eq 0 ]]; then
+    status="$cleanup_status"
+  fi
+  exit "$status"
 }
 
 trap cleanup_temp_paths EXIT
@@ -106,7 +119,7 @@ append_generated_path() {
   local components=()
   local IFS="/"
   read -r -a components <<< "$path"
-  for component in "${components[@]}"; do
+  for component in ${components[@]+"${components[@]}"}; do
     [[ -z "$component" || "$component" == "." || "$component" == ".." ]] && reject_generated_path "$1"
   done
 
@@ -115,10 +128,17 @@ append_generated_path() {
 
 while IFS= read -r line; do
   read -r -a path_tokens <<< "$line"
-  for path in "${path_tokens[@]}"; do
+  for path in ${path_tokens[@]+"${path_tokens[@]}"}; do
     append_generated_path "$path"
   done
 done <<< "$generated_paths_input"
+
+# Resolution is generated with the payload and committed beside source pointers,
+# even when callers customize the list of generated plugin paths.
+external_lock_path="hub.external-plugins.lock.json"
+if [[ " ${generated_paths[*]-} " != *" $external_lock_path "* ]]; then
+  generated_paths+=("$external_lock_path")
+fi
 
 validate_release_branch "$release_branch"
 validate_source_branch "$source_branch"
@@ -263,7 +283,7 @@ snapshot_publish_source() {
     echo "Publish requires committed source changes and a clean index." >&2
     exit 1
   fi
-  if [[ -n "$(git -C "$hub_root" ls-files --others --exclude-standard -- hub.yaml plugins assets hub.repo-context.json)" ]]; then
+  if [[ -n "$(git -C "$hub_root" ls-files --others --exclude-standard -- hub.yaml plugins assets hub.repo-context.json "$external_lock_path")" ]]; then
     echo "Publish requires all hub source files to be committed." >&2
     exit 1
   fi
@@ -278,6 +298,7 @@ snapshot_publish_source() {
     git -C "$repo_root" merge-base --is-ancestor HEAD "$source_base" || status=$?
     if [[ "$status" -eq 1 ]]; then
       echo "Checked-out CI commit is no longer on source branch '$source_branch'; skipping publication."
+      run_completed=true
       exit 0
     fi
     [[ "$status" -eq 0 ]] || exit "$status"
@@ -297,6 +318,7 @@ snapshot_publish_source() {
     status=$?
     [[ "$status" -eq 1 ]] || exit "$status"
     echo "Hub source changed before publication; a newer pipeline owns publication."
+    run_completed=true
     exit 0
   fi
 }
@@ -334,7 +356,7 @@ copy_generated_paths() {
   local destination_root="$1"
   local hub_rel="$2"
 
-  for generated_path in "${generated_paths[@]}"; do
+  for generated_path in ${generated_paths[@]+"${generated_paths[@]}"}; do
     local source_path="$hub_root/$generated_path"
     local destination_path
     if [[ -n "$hub_rel" ]]; then
@@ -356,7 +378,7 @@ copy_payload_generated_paths() {
   local destination_root="$2"
   local hub_rel="$3"
 
-  for generated_path in "${generated_paths[@]}"; do
+  for generated_path in ${generated_paths[@]+"${generated_paths[@]}"}; do
     local source_path
     local destination_path
     if [[ -n "$hub_rel" ]]; then
@@ -393,7 +415,7 @@ cleanup_legacy_generated_paths() {
 restore_generated_paths_on_default_branch() {
   local hub_rel="$1"
 
-  for generated_path in "${generated_paths[@]}"; do
+  for generated_path in ${generated_paths[@]+"${generated_paths[@]}"}; do
     local repo_path
     if [[ -n "$hub_rel" ]]; then
       repo_path="$hub_rel/$generated_path"
@@ -437,6 +459,8 @@ prepare_release_commit() {
 
   cleanup_legacy_generated_paths "$worktree" "$hub_rel"
   copy_payload_generated_paths "$payload_root" "$worktree" "$hub_rel"
+  local verification_path="${hub_rel:+$hub_rel/}hub.external.json"
+  cp "$payload_root/$verification_path" "$worktree/$verification_path"
   if [[ -n "$hub_rel" ]]; then
     git -C "$worktree" add -A "$hub_rel"
   else
@@ -525,11 +549,13 @@ prepare_marketplace_pointer() {
 
   repository_url="$(github_repository_url)"
   mkdir -p "$(dirname "$prepared_path")"
-  python - "$platform" "$marketplace_path" "$prepared_path" "$repository_url" "$release_branch" "$hub_rel" "$GITHUB_REPOSITORY" <<'PY'
+  uv run --project "$GITHUB_ACTION_PATH" python - "$platform" "$marketplace_path" "$prepared_path" "$repository_url" "$release_branch" "$hub_rel" "$GITHUB_REPOSITORY" <<'PY'
 from pathlib import Path
 from urllib.parse import urlsplit
 import json
 import sys
+
+from promptless_instruction_hub.render.external import validate_external_marketplace_source
 
 platform = sys.argv[1]
 source_path = Path(sys.argv[2])
@@ -586,6 +612,10 @@ if not isinstance(plugins, list):
 for plugin in plugins:
     if not isinstance(plugin, dict):
         fail("Expected marketplace plugins to be objects.")
+    source = plugin.get("source")
+    if platform in {"claude", "codex", "cursor"} and isinstance(source, dict) and source.get("source") != "local":
+        validate_external_marketplace_source(source)
+        continue
     path = plugin_local_path(plugin)
     if platform == "cursor" and urlsplit(repository_url).hostname == "github.com":
         plugin["source"] = github_cursor_source(path)
@@ -606,6 +636,14 @@ PY
 prepare_source_commit() {
   local pointer_root="$1"
   local hub_rel="$2"
+  local lock_path="${hub_rel:+$hub_rel/}$external_lock_path"
+  if [[ -f "$payload_root/$lock_path" ]]; then
+    mkdir -p "$(dirname "$pointer_root/$lock_path")"
+    cp "$payload_root/$lock_path" "$pointer_root/$lock_path"
+    marketplace_pointer_paths+=("$lock_path")
+  elif [[ -n "$(git -C "$repo_root" ls-files -- "$lock_path")" ]]; then
+    marketplace_pointer_paths+=("$lock_path")
+  fi
   local worktree
   worktree="$(mktemp -d)"
   rm -rf "$worktree"
@@ -614,7 +652,7 @@ prepare_source_commit() {
   local config_path="${hub_rel:+$hub_rel/}hub.yaml"
   pig set-version --hub "$worktree/${hub_rel:-.}" --version "$publish_version"
 
-  for pointer_path in "${marketplace_pointer_paths[@]}"; do
+  for pointer_path in ${marketplace_pointer_paths[@]+"${marketplace_pointer_paths[@]}"}; do
     local prepared_path="$pointer_root/$pointer_path"
     local destination_path="$worktree/$pointer_path"
     if [[ -f "$prepared_path" ]]; then
@@ -625,7 +663,7 @@ prepare_source_commit() {
     fi
   done
 
-  git -C "$worktree" add -A -- "$config_path" "${marketplace_pointer_paths[@]}"
+  git -C "$worktree" add -A -- "$config_path" ${marketplace_pointer_paths[@]+"${marketplace_pointer_paths[@]}"}
   # Git skips lease checks for unchanged refs. Every release update needs a
   # source commit, including explicit versions whose hub.yaml is already current.
   if [[ "$release_commit" != "$release_base" ]] || ! git -C "$worktree" diff --cached --quiet; then
@@ -641,12 +679,14 @@ case "$mode" in
   build)
     hub_rel="$(hub_relative_path)"
     pig validate --hub "$hub_root"
+    pig resolve-external --hub "$hub_root"
     pig build --hub "$hub_root"
     restore_generated_paths_on_default_branch "$hub_rel"
     ;;
   check)
     hub_relative_path >/dev/null
     pig validate --hub "$hub_root"
+    pig verify-external --hub "$hub_root"
     pig build --hub "$hub_root" --check
     ;;
   publish)
@@ -657,17 +697,22 @@ case "$mode" in
     previous_release_root="$(mktemp -d)"
     payload_root="$(mktemp -d)"
     pointer_root="$(mktemp -d)"
-    temp_paths+=("$previous_release_root" "$payload_root" "$pointer_root")
+    verification_output="$(mktemp)"
+    temp_paths+=("$previous_release_root" "$payload_root" "$pointer_root" "$verification_output")
     pig validate --hub "$hub_root"
     if copy_previous_release_branch "$previous_release_root"; then
       previous_release_exists=true
+      pig resolve-external --hub "$hub_root" --previous-release-root "$previous_release_root" --hub-relative-path "$hub_rel" >"$verification_output"
     else
       previous_release_exists=false
+      pig resolve-external --hub "$hub_root" >"$verification_output"
     fi
+    cat "$verification_output"
     publish_version="$(resolve_publish_version "$previous_release_root" "$hub_rel" "$previous_release_exists")"
     pig build --hub "$hub_root" --version "$publish_version"
     copy_generated_paths "$payload_root" "$hub_rel"
     restore_generated_paths_on_default_branch "$hub_rel"
+    pig record-external-verification --manifest "$payload_root/${hub_rel:+$hub_rel/}hub.release.json" --verification "$verification_output"
     marketplace_pointer_paths=()
     if [[ "$update_claude_pointer" == "true" ]]; then
       prepare_marketplace_pointer "claude" "$payload_root" "$pointer_root" "$hub_rel"
@@ -697,3 +742,4 @@ esac
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   printf 'release-branch=%s\n' "$release_branch" >> "$GITHUB_OUTPUT"
 fi
+run_completed=true

@@ -7,10 +7,12 @@ import json
 import sys
 from pathlib import Path
 
+from promptless_instruction_hub.agent_skills import AgentSkillWarning
 from promptless_instruction_hub.config import RELEASE_MANIFEST_PATH, write_hub_version
 from promptless_instruction_hub.compiler import build_hub, init_hub, validate_hub, verify_hub
 from promptless_instruction_hub.errors import InstructionHubError
-from promptless_instruction_hub.mcp_status import run_status_mcp
+from promptless_instruction_hub.external_plugins import resolve_external_plugins, verify_external_plugins
+from promptless_instruction_hub.release.external import write_external_verification
 from promptless_instruction_hub.release.versions import resolve_publish_version
 from promptless_instruction_hub.scan.hub import scan_hub
 from promptless_instruction_hub.status import summarize_release_manifest
@@ -34,7 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     init_parser = subcommands.add_parser("init", help="initialize an empty Instruction Hub")
     _add_hub_arg(init_parser)
-    init_parser.add_argument("--org", default="Promptless")
+    init_parser.add_argument("--org", required=True, help="organization that owns this Instruction Hub")
     init_parser.add_argument("--marketplace-id")
     init_parser.add_argument("--marketplace-name")
     init_parser.add_argument("--version", default="0.1.0")
@@ -52,6 +54,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_hub_arg(verify_parser)
 
+    for command, help_text in (
+        ("verify-external", "fetch and verify pinned or locked upstream plugins"),
+        ("resolve-external", "refresh latest upstream plugins and write verified commit pins"),
+    ):
+        external_parser = subcommands.add_parser(command, help=help_text)
+        _add_hub_arg(external_parser)
+        external_parser.add_argument("--previous-release-root", type=Path)
+        external_parser.add_argument("--hub-relative-path", default="")
+
+    external_record_parser = subcommands.add_parser("record-external-verification", help=argparse.SUPPRESS)
+    external_record_parser.add_argument("--manifest", type=Path, required=True)
+    external_record_parser.add_argument("--verification", type=Path, required=True)
+
     build_parser = subcommands.add_parser("build", help="generate target distribution artifacts")
     _add_hub_arg(build_parser)
     build_parser.add_argument("--check", action="store_true", help="fail if generated artifacts are stale")
@@ -68,9 +83,6 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_hub_arg(publish_version_parser)
     publish_version_parser.add_argument("--previous-release-root", type=Path)
     publish_version_parser.add_argument("--hub-relative-path", default="")
-
-    mcp_parser = subcommands.add_parser("mcp-status", help=argparse.SUPPRESS)
-    mcp_parser.add_argument("--manifest", type=Path, required=True)
 
     return parser
 
@@ -99,18 +111,31 @@ def _dispatch(args: argparse.Namespace) -> int:
         return 0
     if args.command == "validate":
         result = validate_hub(args.hub)
+        _print_conversion_warnings(result.warnings)
         print(f"valid Instruction Hub: {len(result.stable_assets)} stable asset(s)")
         return 0
     if args.command == "verify":
         result = verify_hub(args.hub)
+        _print_conversion_warnings(result.warnings)
         print(
             f"verified release {result.release_id} ({result.release_hash[:12]}) across {result.target_count} target(s)"
         )
         return 0
+    if args.command in {"verify-external", "resolve-external"}:
+        operation = resolve_external_plugins if args.command == "resolve-external" else verify_external_plugins
+        records = operation(
+            args.hub, previous_release_root=args.previous_release_root, hub_relative_path=args.hub_relative_path
+        )
+        print(json.dumps({"verified_external_plugins": records}, indent=2, sort_keys=True))
+        return 0
     if args.command == "build":
         result = build_hub(args.hub, check=args.check, version=args.version)
+        _print_conversion_warnings(result.warnings)
         verb = "checked" if result.checked else "built"
         print(f"{verb} release {result.release_id} ({result.release_hash[:12]})")
+        return 0
+    if args.command == "record-external-verification":
+        write_external_verification(args.manifest, args.verification)
         return 0
     if args.command == "publish-version":
         print(
@@ -127,11 +152,13 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.command == "status":
         print(json.dumps(summarize_release_manifest(args.manifest), indent=2, sort_keys=True))
         return 0
-    if args.command == "mcp-status":
-        run_status_mcp(args.manifest)
-        return 0
     msg = f"unknown command: {args.command}"
     raise InstructionHubError(msg)
+
+
+def _print_conversion_warnings(warnings: tuple[AgentSkillWarning, ...]) -> None:
+    for warning in warnings:
+        print(f"warning: {warning.message}", file=sys.stderr)
 
 
 if __name__ == "__main__":

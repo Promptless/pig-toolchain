@@ -113,7 +113,7 @@ def test_collect_uploads_full_transcript_then_only_new_ranges(tmp_path: Path) ->
         assert batch["host"] == "codex"
         assert batch["session_id"] == "codex_session_1"
         assert batch["policy_version"] == 1
-        assert batch["collector_version"] == "0.2.9"
+        assert batch["collector_version"] == "0.3.0"
         chunks = _json_list(batch["chunks"], "batch.chunks")
         # contiguous complete lines coalesce into one contract-shaped range chunk
         assert len(chunks) == 1
@@ -878,7 +878,7 @@ def test_collect_skips_unreadable_idle_source_and_uploads_the_rest(tmp_path: Pat
         }
         assert uploaded_contents == {second_record, readable_record}
         diagnostics = _diagnostic_log_entries(home)
-        assert diagnostics[-1]["status"] == "trace_upload_complete"
+        assert diagnostics[-1]["status"] == "trace_upload_partial"
         assert diagnostics[-1]["unreadable_source_count"] == 1
         assert diagnostics[-1]["batch_count"] == 2
 

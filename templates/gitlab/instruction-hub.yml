@@ -25,7 +25,7 @@ spec:
     - python -m pip install --disable-pip-version-check --no-cache-dir "uv==$UV_VERSION"
     - export INSTRUCTION_HUB_TOOLCHAIN_DIR="$(mktemp -d)"
     - git init --quiet "$INSTRUCTION_HUB_TOOLCHAIN_DIR"
-    - git -C "$INSTRUCTION_HUB_TOOLCHAIN_DIR" remote add origin https://github.com/Promptless/instruction-hub-toolchain.git
+    - git -C "$INSTRUCTION_HUB_TOOLCHAIN_DIR" remote add origin https://github.com/Promptless/pig-toolchain.git
     - git -C "$INSTRUCTION_HUB_TOOLCHAIN_DIR" fetch --quiet --depth 1 origin "$INSTRUCTION_HUB_TOOLCHAIN_REF"
     - git -C "$INSTRUCTION_HUB_TOOLCHAIN_DIR" checkout --quiet --detach FETCH_HEAD
     - git -C "$INSTRUCTION_HUB_TOOLCHAIN_DIR" log -1 --format='Toolchain commit %H'

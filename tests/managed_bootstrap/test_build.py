@@ -314,6 +314,7 @@ def test_build_injects_managed_bootstrap_runtime(tmp_path: Path) -> None:
                     input=input_text,
                     capture_output=True,
                     check=False,
+                    timeout=hook["timeout"],
                 )
             if root is not None:
                 env_vars["PLUGIN_ROOT"] = str(root)
@@ -325,6 +326,7 @@ def test_build_injects_managed_bootstrap_runtime(tmp_path: Path) -> None:
                 input=input_text,
                 capture_output=True,
                 check=False,
+                timeout=hook["timeout"],
             )
 
         def make_stale_root_with_sibling_runtime(lifecycle: str) -> Path:
@@ -340,6 +342,7 @@ def test_build_injects_managed_bootstrap_runtime(tmp_path: Path) -> None:
             stale_runtime.write_text("raise SystemExit(97)\n")
             sibling_runtime.parent.mkdir(parents=True)
             shutil.copy2(stub_runtime, sibling_runtime)
+            shutil.copy2(stub_runtime.parent / "cursor-hook.cjs", sibling_bin / "cursor-hook.cjs")
             shutil.copytree(stub_runtime_package, sibling_bin / HOST_RUNTIME_PACKAGE)
             sibling_runtime.chmod(0o644)
             return stale_root
@@ -586,24 +589,30 @@ def test_build_injects_managed_bootstrap_runtime(tmp_path: Path) -> None:
         assert_quiet_success(rooted)
         assert_startup_calls()
 
-        if target == "codex" and os.name == "posix":
+        if os.name == "posix":
             reset_stub_calls()
-            stop_hook_command = hook_events["Stop"][0]["hooks"][0]["command"]
-            collect_release_file = tmp_path / "codex-collect-release"
+            session_end_hook = hook_events["SessionEnd"][0]["hooks"][0]
+            session_end_command = (
+                [session_end_hook["command"], *session_end_hook["args"]]
+                if target == "claude"
+                else session_end_hook["command"]
+            )
+            root_env = {"CLAUDE_PLUGIN_ROOT" if target == "claude" else "PLUGIN_ROOT": str(stub_root)}
+            collect_release_file = tmp_path / f"{target}-collect-release"
             stdin_payload = json.dumps(
                 {
-                    "session_id": "codex_session_1",
-                    "transcript_path": str(tmp_path / "codex-session.jsonl"),
+                    "session_id": f"{target}_session_1",
+                    "transcript_path": str(tmp_path / f"{target}-session.jsonl"),
                 }
             )
             hook_process: subprocess.Popen[str] | None = None
             try:
                 hook_process = subprocess.Popen(
-                    stop_hook_command,
-                    shell=True,
+                    session_end_command,
+                    shell=target == "codex",
                     env=_clean_env(
-                        HOME=str(tmp_path / "codex-process-group-home"),
-                        PLUGIN_ROOT=str(stub_root),
+                        HOME=str(tmp_path / f"{target}-process-group-home"),
+                        **root_env,
                         PROMPTLESS_STUB_CALL_LOG=str(stub_call_log),
                         PROMPTLESS_STUB_ATTEMPT_LOG=str(stub_attempt_log),
                         PROMPTLESS_STUB_STARTED_LOG=str(stub_started_log),
@@ -616,7 +625,7 @@ def test_build_injects_managed_bootstrap_runtime(tmp_path: Path) -> None:
                     text=True,
                     start_new_session=True,
                 )
-                stdout, stderr = hook_process.communicate(input=stdin_payload, timeout=5)
+                stdout, stderr = hook_process.communicate(input=stdin_payload, timeout=session_end_hook["timeout"])
                 assert hook_process.returncode == 0
                 assert stdout == ""
                 assert stderr == ""
@@ -639,11 +648,11 @@ def test_build_injects_managed_bootstrap_runtime(tmp_path: Path) -> None:
                 if hook_process is not None and hook_process.poll() is None:
                     hook_process.kill()
                     hook_process.communicate(timeout=5)
-            assert_terminal_calls("stop")
+            assert_terminal_calls("session_end")
             assert_stdin_entries_eventually(
                 [
                     {
-                        "argv": ["collect", "--host", "codex", "--lifecycle", "stop", "--quiet"],
+                        "argv": ["collect", "--host", target, "--lifecycle", "session_end", "--quiet"],
                         "stdin": stdin_payload,
                     }
                 ]
@@ -898,7 +907,7 @@ def test_build_injects_managed_bootstrap_runtime(tmp_path: Path) -> None:
         assert runtime["id"] == "host-runtime"
         assert runtime["status"] == "included"
         assert runtime["target"] == target
-        assert runtime["version"] == "0.2.9"
+        assert runtime["version"] == "0.3.0"
         assert runtime["channel"] == "stable"
         assert runtime["path"] == f"runtime/{HOST_RUNTIME_BIN}"
         assert runtime["sha256"] == _runtime_bundle_sha256(plugin_root / "runtime")
@@ -908,20 +917,20 @@ def test_build_injects_managed_bootstrap_runtime(tmp_path: Path) -> None:
     codex_manifest = json.loads((hub_root / "dist/codex/pig/.codex-plugin/plugin.json").read_text())
     assert codex_manifest["hooks"] == "./hooks/hooks.json"
 
-    for target in ("cursor", "gemini"):
+    for target in ("gemini",):
         plugin_root = hub_root / "dist" / target / "pig"
         assert not (plugin_root / "runtime" / HOST_RUNTIME_BIN).exists()
         assert not (plugin_root / "runtime" / HOST_RUNTIME_PACKAGE).exists()
         assert not (plugin_root / "hub.managed-runtimes.json").exists()
 
     release_manifest = json.loads((hub_root / "hub.release.json").read_text())
-    assert {runtime["target"] for runtime in release_manifest["managed_runtimes"]} == {"codex", "claude"}
+    assert {runtime["target"] for runtime in release_manifest["managed_runtimes"]} == {"codex", "claude", "cursor"}
     _assert_no_promptless_directory(hub_root)
 
 
 def test_host_runtime_bundle_digest_tracks_runtime_files_only(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/codex/pig"
