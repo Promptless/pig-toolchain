@@ -154,7 +154,11 @@ def smoke(bundle: Path, *, complete: bool, embedded: bool = False) -> None:
                             ),
                             encoding="utf-8",
                         )
-                        probe_command = [argument.replace(str(launcher), str(probe_batch)) for argument in command]
+                        probe_command = [
+                            argument.replace(f"{cursor_plugin}/runtime/cursor-hook.cmd", str(probe_batch))
+                            for argument in command
+                        ]
+                        assert probe_command != command, "Input diagnostic must replace the emitted launcher path"
                         probe = subprocess.run(probe_command, env=env, capture_output=True, text=True, timeout=30)
                         input_probe = f"input probe={probe.returncode}: {probe.stdout} {probe.stderr}"
                     replay = subprocess.run(
