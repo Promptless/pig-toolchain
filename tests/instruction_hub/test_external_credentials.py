@@ -169,7 +169,7 @@ def test_private_upstream_resolves_and_verifies_without_persisting_credentials(
 ) -> None:
     set_credentials(monkeypatch, git_server.url)
     hub = tmp_path / "hub"
-    init_hub(hub)
+    init_hub(hub, org="Acme")
     definition = external_definition("latest")
     definition["source"]["url"] = git_server.url
     write_external(hub, definition)
@@ -234,7 +234,7 @@ def test_failed_authentication_does_not_report_password(
 ) -> None:
     set_credentials(monkeypatch, git_server.url, "wrong-secret-password")
     hub = tmp_path / "hub"
-    init_hub(hub)
+    init_hub(hub, org="Acme")
     definition = external_definition(git_server.sha)
     definition["source"]["url"] = git_server.url
     write_external(hub, definition)
@@ -308,7 +308,7 @@ def test_authenticated_fetch_disables_git_tracing(monkeypatch: pytest.MonkeyPatc
 def test_invalid_credentials_report_actionable_cli_error_without_echoing_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Acme")
     write_external(tmp_path, external_definition())
     monkeypatch.setenv(CREDENTIALS_ENV, '{"secret-invalid-json')
     assert main(["verify-external", "--hub", str(tmp_path)]) == 1
