@@ -127,22 +127,31 @@ optional and go under the remote include's `inputs`:
 
 | Input | Default | Purpose |
 | --- | --- | --- |
+| `hub-root` | `.` | Hub directory within the checked-out repository, such as `docs/hub`. |
 | `toolchain-ref` | `main` | Leave as `main` to use the latest merged compiler. |
 | `release-branch` | `release/stable` | Branch that receives generated artifacts; must differ from the default branch. |
 | `check-stage` | `test` | Existing pipeline stage for validation. |
 | `publish-stage` | `deploy` | Existing pipeline stage for publishing. |
 
-For a pipeline with custom stages, use `include:inputs`:
+For a nested hub and a pipeline with custom stages, use `include:inputs`:
 
 ```yaml
 stages: [verify, publish]
 include:
   - remote: https://raw.githubusercontent.com/Promptless/pig-toolchain/main/templates/gitlab/instruction-hub.yml
     inputs:
+      hub-root: docs/hub
       check-stage: verify
       publish-stage: publish
       release-branch: release/stable
 ```
+
+Use `.` or a normalized relative directory path without a leading `./` or trailing
+slash. Directory names may contain ASCII letters, digits, dots, underscores, and
+hyphens, and must include at least one character other than a dot. The directory
+must exist inside the checkout and cannot contain symlink components. Both jobs
+use this directory; change filters and queued-publication checks follow its hub
+source files, plus the repository's `.gitlab-ci.yml` and `.gitignore`.
 
 The compiler defaults to `main`: each job fetches the latest merged toolchain
 when it starts and logs the resolved commit for diagnostics. Keep both the
