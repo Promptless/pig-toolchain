@@ -42,6 +42,7 @@ from .helpers import (
     _read_bootstrap_process,
     _run_bootstrap,
     _run_runtime_json,
+    _scoped_ledger_path_for_test,
     _start_bootstrap,
 )
 
@@ -943,9 +944,15 @@ def test_bootstrap_configures_codex_and_claude_and_reports_metadata(tmp_path: Pa
             assert effective_config["managed_config_detected"] is False
             assert effective_config["trace_upload_endpoint"] == f"{server.base_url}/v0/traces/batches"
             host = _json_string(check_in["host"], "host")
+            home = codex_home if host == "codex" else claude_home
             assert effective_config["native_root_count"] == expected_native_root_counts[host]
-            assert _json_string(effective_config["source_ledger_path"], "source_ledger_path").endswith(
-                "host-runtime-ledger.json"
+            assert effective_config["source_ledger_path"] == str(
+                _scoped_ledger_path_for_test(
+                    home / ".promptless/instruction-hub/host-runtime-ledger.json",
+                    home=home,
+                    worker_base_url=server.base_url,
+                    host="codex" if host == "codex" else "claude",
+                )
             )
         codex_effective_config = _json_mapping(server.check_ins[0]["effective_config"], "codex effective_config")
         claude_effective_config = _json_mapping(server.check_ins[1]["effective_config"], "claude effective_config")

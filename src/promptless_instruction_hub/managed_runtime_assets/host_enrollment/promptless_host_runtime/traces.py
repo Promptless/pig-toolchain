@@ -65,7 +65,7 @@ from .metadata import (
     _worker_base_url,
 )
 from .output import _emit
-from .storage import _atomic_write_text, _ledger_path, _try_lock_state_file, _unlock_state_file
+from .storage import _atomic_write_text, _ledger_path, _scoped_ledger_path, _try_lock_state_file, _unlock_state_file
 from .validation import (
     _decode_json_object,
     _json_mapping_or_empty,
@@ -97,7 +97,6 @@ def _run_collect(
 ) -> CollectionResult:
     plugin_root = _plugin_root()
     metadata = _load_runtime_metadata(plugin_root, host)
-    ledger_path = _ledger_path()
     worker_base_url = _worker_base_url()
     dashboard_base_url = _dashboard_base_url()
     enrollment_target = _enrollment_host(host)
@@ -105,6 +104,13 @@ def _run_collect(
         metadata if enrollment_target == host else _load_runtime_metadata(plugin_root, enrollment_target)
     )
     context = _enrollment_context(worker_base_url, dashboard_base_url, enrollment_metadata)
+    ledger_path = _scoped_ledger_path(
+        _ledger_path(),
+        worker_base_url=context.worker_base_url,
+        deployment_instance_id=context.deployment_instance_id,
+        host_instance_id=context.host_instance_id,
+        host=host,
+    )
     credential = _cached_host_credential(context)
     if credential is None:
         _emit({"status": "trace_upload_skipped", "reason": "not_enrolled", "host": host}, quiet=quiet)
