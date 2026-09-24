@@ -29,7 +29,7 @@ from promptless_instruction_hub.models import (
 ASSETS_DIR = Path("assets")
 METADATA_FILE = "asset.yaml"
 SECRET_KEY_WORDS = {"token", "tokens", "secret", "secrets", "password", "passwords", "apikey"}
-SECRET_KEY_NAMES = {"authorization", "cookie", "proxy_authorization", "x_api_key"}
+SECRET_KEY_NAMES = {"authorization", "cookie", "pgpassword", "proxy_authorization", "x_api_key"}
 ENV_REFERENCE = re.compile(
     r"(?:\$\{(?:[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_-]*)\}|env:[A-Za-z_][A-Za-z0-9_]*)"
 )
