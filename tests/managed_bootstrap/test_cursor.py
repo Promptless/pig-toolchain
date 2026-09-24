@@ -786,6 +786,106 @@ def test_unrelated_pending_session_does_not_block_notification_completion(databa
     assert "recovered message" in (cursor_capture.spool_root() / "journals/unsaved.jsonl").read_text()
 
 
+def test_unrelated_discovery_retries_do_not_block_notification_completion(
+    database: sqlite3.Connection, tmp_path: Path
+) -> None:
+    transcripts = tmp_path / "transcripts"
+    transcripts.mkdir()
+    for index in range(41):
+        session = f"idle-{index:02}"
+        (transcripts / f"{session}.jsonl").touch()
+        if index:
+            put(database, "composerData:" + session, {"fullConversationHeadersOnly": []})
+    put(database, "composerData:subject", {"fullConversationHeadersOnly": []})
+    context = HookTraceContext(
+        session_id="subject",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    for _ in range(4):
+        assert cursor_capture.prepare_journals(context, "session_end").complete
+    put(database, "composerData:idle-00", {"fullConversationHeadersOnly": [{"bubbleId": "a"}]})
+    put(database, "bubbleId:idle-00:a", {"type": 1, "text": "background recovered"})
+    assert cursor_capture.prepare_journals(context, "session_end").complete
+    assert "background recovered" in (cursor_capture.spool_root() / "journals/idle-00.jsonl").read_text()
+
+
+def test_failed_child_journal_does_not_lose_parent_page_progress(
+    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cursor_database, "PAGE_SIZE", 1)
+    monkeypatch.setattr(cursor_capture, "MAX_JOURNAL", 8192)
+    put(
+        database,
+        "composerData:parent",
+        {
+            "fullConversationHeadersOnly": [{"bubbleId": str(index)} for index in range(3)],
+            "subagentComposerIds": ["child"],
+        },
+    )
+    for index in range(3):
+        put(database, f"bubbleId:parent:{index}", {"type": 1, "text": str(index)})
+    put(database, "composerData:child", {"fullConversationHeadersOnly": [{"bubbleId": "a"}]})
+    put(database, "bubbleId:child:a", {"type": 1, "text": "child"})
+    journals = cursor_capture.spool_root() / "journals"
+    journals.mkdir(parents=True)
+    (journals / "child.jsonl").write_bytes(b"\n" * 8193)
+    context = HookTraceContext(
+        session_id="parent",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    for _ in range(3):
+        assert not cursor_capture.prepare_journals(context, "session_end").complete
+    rows = [json.loads(line) for line in (journals / "parent.jsonl").read_text().splitlines()]
+    assert [row["event"]["text"] for row in rows if row["event"]["kind"] == "user_message"] == ["0", "1", "2"]
+    diagnostics = json.loads((cursor_capture.spool_root() / "diagnostics.json").read_text())
+    assert diagnostics["errors"]["journal_write"] == 1
+    (journals / "child.jsonl").unlink()
+    for _ in range(3):
+        exported = cursor_capture.prepare_journals(context, "session_end")
+        if exported.complete:
+            break
+    assert exported.complete
+    assert "child" in (journals / "child.jsonl").read_text()
+
+
+def test_discovered_child_shares_page_progress_with_required_traversal(
+    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cursor_database, "PAGE_SIZE", 1)
+    transcripts = tmp_path / "transcripts"
+    transcripts.mkdir()
+    (transcripts / "child.jsonl").touch()
+    put(database, "composerData:parent", {"fullConversationHeadersOnly": [], "subagentComposerIds": ["child"]})
+    put(database, "composerData:child", {"fullConversationHeadersOnly": [{"bubbleId": str(i)} for i in range(4)]})
+    for index in range(4):
+        put(database, f"bubbleId:child:{index}", {"type": 1, "text": str(index)})
+    context = HookTraceContext(
+        session_id="parent",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    for _ in range(6):
+        exported = cursor_capture.prepare_journals(context, "session_end")
+        if exported.complete:
+            break
+    assert exported.complete
+    rows = [
+        json.loads(line) for line in (cursor_capture.spool_root() / "journals/child.jsonl").read_text().splitlines()
+    ]
+    assert [row["event"]["text"] for row in rows] == ["0", "1", "2", "3"]
+
+
 def test_cursor_collect_uploads_only_acknowledged_journal_ranges(tmp_path: Path) -> None:
     """Exercise generated bundle, enrollment, native export, gzip upload and ledger."""
     import gzip
