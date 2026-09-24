@@ -23,9 +23,9 @@ def test_reusable_workflows_run_caller_pinned_toolchain_ref(workflow_name: str) 
     workflow_text = (WORKFLOWS / workflow_name).read_text()
 
     assert "Promptless/pig-toolchain@v0" not in workflow_text
-    assert (f"EXPECTED_WORKFLOW_PREFIX: Promptless/pig-toolchain/.github/workflows/{workflow_name}@") in workflow_text
+    assert f"EXPECTED_WORKFLOW_PATH: .github/workflows/{workflow_name}" in workflow_text
     assert "JOB_WORKFLOW_REF: ${{ job.workflow_ref }}" in workflow_text
-    assert "repository: Promptless/pig-toolchain" in workflow_text
+    assert "repository: ${{ steps.toolchain-ref.outputs.repository }}" in workflow_text
     assert "ref: ${{ steps.toolchain-ref.outputs.ref }}" in workflow_text
     assert "path: .promptless-pig-toolchain" in workflow_text
     assert "uses: ./.promptless-pig-toolchain" in workflow_text

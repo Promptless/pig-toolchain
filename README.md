@@ -97,8 +97,33 @@ If your source branch is not `main`, update `push.branches`, the job's `if`, and
 callers.
 
 Use `@main` in both workflow references to follow the latest merged toolchain.
-Each reusable workflow checks out the compiler using the ref in its
-caller's `uses`; there is no separate `toolchain-ref` input on GitHub.
+Each reusable workflow checks out the compiler from its own repository and ref,
+as reported by GitHub's `job.workflow_ref`. To use a mirror, change the repository
+in both callers' `uses`; branches, tags, and full commit SHAs are supported.
+There is no separate repository or `toolchain-ref` input on GitHub.
+
+For a private toolchain mirror, pass the optional `toolchain-token` secret in
+both callers. Use a fine-grained token or current GitHub App installation token
+with read access to the mirror's contents:
+
+```yaml
+jobs:
+  instruction-hub:
+    uses: Acme/pig-toolchain/.github/workflows/pr-check.yml@main
+    secrets:
+      toolchain-token: ${{ secrets.PIG_TOOLCHAIN_READ_TOKEN }}
+```
+
+The token is used only for the compiler checkout and is not persisted. Without
+it, checkout uses the caller's automatic `GITHUB_TOKEN`, which can read public
+repositories but cannot read another private repository. The caller must also
+have permission to use the mirror's reusable workflows in GitHub Actions.
+Hub checkout and publication keep their existing credentials.
+
+These reusable workflows require GitHub's
+[job workflow identity context](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#job-context),
+which is not currently available on GitHub Enterprise Server. On that platform,
+use [the composite action](#direct-action-usage) from your mirror in a custom job.
 
 ### GitLab CI
 
@@ -127,6 +152,7 @@ optional and go under the remote include's `inputs`:
 
 | Input | Default | Purpose |
 | --- | --- | --- |
+| `toolchain-repository` | `https://github.com/Promptless/pig-toolchain.git` | HTTPS clone URL for the compiler repository or your mirror, without embedded credentials. |
 | `toolchain-ref` | `main` | Leave as `main` to use the latest merged compiler. |
 | `release-branch` | `release/stable` | Branch that receives generated artifacts; must differ from the default branch. |
 | `check-stage` | `test` | Existing pipeline stage for validation. |
@@ -146,7 +172,27 @@ include:
 
 The compiler defaults to `main`: each job fetches the latest merged toolchain
 when it starts and logs the resolved commit for diagnostics. Keep both the
-remote template URL and `toolchain-ref` on `main`. The template runs the same `scripts/run.sh` entrypoint as the
+remote template URL and `toolchain-ref` on `main`, or pin both to the same full
+commit SHA. To use a mirror, include the template from that mirror and set
+`toolchain-repository` to its HTTPS clone URL. For a mirror on your GitLab
+instance, for example:
+
+```yaml
+include:
+  - project: platform/pig-toolchain
+    ref: main
+    file: /templates/gitlab/instruction-hub.yml
+    inputs:
+      toolchain-repository: https://gitlab.example.com/platform/pig-toolchain.git
+```
+
+The clone URL accepts a hostname, optional port, and path components containing
+letters, digits, dots, underscores, or hyphens. Do not put credentials in the
+URL; private mirrors require a Git credential helper configured on the runner
+for that repository. Including a private template does not authenticate its
+compiler checkout.
+
+The template runs the same `scripts/run.sh` entrypoint as the
 GitHub Action, with GitLab workspace, repository, identity, and branch checks
 supplied by the template.
 
