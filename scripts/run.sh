@@ -305,6 +305,9 @@ snapshot_publish_source() {
   fi
   if git -C "$repo_root" merge-base --is-ancestor "$source_base" HEAD; then
     return
+  else
+    status=$?
+    [[ "$status" -eq 1 ]] || exit "$status"
   fi
 
   # Compare release inputs, allowing pointer-only and unrelated commits to advance.
