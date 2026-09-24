@@ -2,6 +2,10 @@ name: Publish Instruction Hub
 
 on:
   workflow_call:
+    secrets:
+      toolchain-token:
+        description: Optional token with read access to a private toolchain repository. Defaults to github.token.
+        required: false
     inputs:
       hub-root:
         description: Path to the Instruction Hub root.
@@ -18,10 +22,6 @@ on:
         required: false
         type: string
         default: main
-    secrets:
-      toolchain-token:
-        description: Optional token with read access to a private toolchain repository. Defaults to github.token.
-        required: false
 
 concurrency:
   group: instruction-hub-publish-${{ inputs.source-branch }}-${{ inputs.release-branch }}
