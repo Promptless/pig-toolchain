@@ -55,6 +55,9 @@
         },
         "dashboard_base_url": {
           "$ref": "#/$defs/https_origin"
+        },
+        "hosted_api_base_url": {
+          "$ref": "#/$defs/https_origin"
         }
       },
       "default": {"enabled": false}

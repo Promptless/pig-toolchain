@@ -160,6 +160,7 @@ def _write_runtime_config(target_root: Path, config: HubConfig) -> None:
     for key, value in (
         ("worker_base_url", config.trace_ingestion.worker_base_url),
         ("dashboard_base_url", config.trace_ingestion.dashboard_base_url),
+        ("hosted_api_base_url", config.trace_ingestion.hosted_api_base_url),
     ):
         if value is not None:
             runtime_config[key] = value

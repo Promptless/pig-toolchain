@@ -10,6 +10,7 @@ from pathlib import Path
 from .contracts import (
     BootstrapError,
     DEFAULT_DASHBOARD_BASE_URL,
+    DEFAULT_HOSTED_API_BASE_URL,
     DEFAULT_WORKER_BASE_URL,
     Host,
     MANAGED_RUNTIME_ID,
@@ -72,6 +73,16 @@ def _dashboard_base_url() -> str:
     )
 
 
+def _hosted_api_base_url() -> str:
+    config = _load_runtime_config(_plugin_root())
+    return _normalize_base_url(
+        os.environ.get("PROMPTLESS_HOSTED_API_BASE_URL")
+        or config.get("hosted_api_base_url")
+        or DEFAULT_HOSTED_API_BASE_URL,
+        label="hosted API base URL",
+    )
+
+
 def _runtime_config_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     config: dict[str, object] = {}
     for key, value in pairs:
@@ -101,13 +112,13 @@ def _load_runtime_config(plugin_root: Path | None) -> dict[str, str]:
         raise BootstrapError(f"{RUNTIME_CONFIG_NAME} must contain valid JSON") from exc
     if not isinstance(config, dict):
         raise BootstrapError(f"{RUNTIME_CONFIG_NAME} must contain a JSON object")
-    allowed_keys = {"schema_version", "worker_base_url", "dashboard_base_url"}
+    allowed_keys = {"schema_version", "worker_base_url", "dashboard_base_url", "hosted_api_base_url"}
     if set(config) - allowed_keys:
         raise BootstrapError(f"{RUNTIME_CONFIG_NAME} contains unsupported fields")
     if type(config.get("schema_version")) is not int or config["schema_version"] != RUNTIME_CONFIG_SCHEMA_VERSION:
         raise BootstrapError(f"{RUNTIME_CONFIG_NAME} requires schema_version {RUNTIME_CONFIG_SCHEMA_VERSION}")
     endpoints: dict[str, str] = {}
-    for key in ("worker_base_url", "dashboard_base_url"):
+    for key in ("worker_base_url", "dashboard_base_url", "hosted_api_base_url"):
         if key not in config:
             continue
         value = config[key]

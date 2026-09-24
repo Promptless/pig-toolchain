@@ -1,4 +1,4 @@
-"""Browser enrollment and host-credential persistence."""
+"""Browser and device enrollment with host-credential persistence."""
 
 from __future__ import annotations
 
@@ -39,6 +39,7 @@ from .contracts import (
     OPEN_BROWSER_ENV,
     RuntimeMetadata,
 )
+from .metadata import _hosted_api_base_url
 from .output import _emit
 from .storage import _load_state, _state_file_lock, _state_path, _try_lock_state_file, _unlock_state_file, _write_state
 from .validation import (
@@ -92,11 +93,11 @@ def _worker_deployment_instance_id(worker_base_url: str) -> str:
 
 @contextmanager
 def _enrollment_leader_lock(context: EnrollmentContext, state_path: Path) -> Iterator[bool]:
-    """Serialize browser-approval enrollment across the plugins that share this host credential.
+    """Serialize enrollment and one-time exchange for plugins sharing a host credential.
 
-    Yields ``True`` to the single process that wins the lock (the leader, which opens the one
-    browser approval) and ``False`` to any concurrent process for the same credential (a
-    follower, which must not open a second browser). The lock is scoped to the credential cache
+    Yields ``True`` to the single process that wins the lock and may initiate or poll
+    approval. Concurrent followers yield ``False`` and must not initiate another approval
+    or consume the one-time credential. The lock is scoped to the credential cache
     key so independent agent hosts still enroll in parallel, and it is
     non-blocking so a follower returns immediately and defers to a later session instead of
     stacking up behind the leader's approval wait.
@@ -208,14 +209,8 @@ def _forget_cached_host_credential(context: EnrollmentContext) -> None:
 
 def _enroll_host_credential(context: EnrollmentContext, *, quiet: bool) -> EnrollmentAttempt:
     state_path = _state_path()
-    session = _load_pending_enrollment_session(context, state_path)
-    if session is not None:
-        # A pending session already exists (e.g. left by an earlier session start); polling it
-        # opens no browser, so no cross-plugin coordination is needed here.
-        return _complete_host_enrollment(context, state_path, session)
-    # A fresh enrollment opens a browser. Serialize that across every plugin on this host so only
-    # the leader drives the single browser approval; concurrent followers reuse the resulting
-    # credential or defer rather than opening their own browser window.
+    # Serialize creation and one-time credential consumption across plugins and
+    # explicit device enrollment. A follower reuses the result or defers.
     with _enrollment_leader_lock(context, state_path) as is_enrollment_leader:
         if not is_enrollment_leader:
             return EnrollmentAttempt(credential=_cached_host_credential(context), reason="enrollment_in_progress")
@@ -276,6 +271,20 @@ def _pending_enrollment_session(context: EnrollmentContext, state: dict[str, Jso
         return None
     if deployment_instance_id != context.deployment_instance_id:
         return None
+    if not 1 <= poll_interval_seconds <= 30:
+        raise BootstrapError("pending host enrollment poll interval must be between 1 and 30 seconds")
+    hosted_api_base_url = _string_value(session_value.get("hosted_api_base_url"))
+    approval_url = _string_value(session_value.get("approval_url"))
+    if "hosted_api_base_url" in session_value or "approval_url" in session_value:
+        if hosted_api_base_url is None or hosted_api_base_url != _hosted_api_base_url() or approval_url is None:
+            raise BootstrapError(
+                "pending device enrollment endpoint changed; reset the host enrollment before retrying"
+            )
+        if poll_url != _device_poll_url(hosted_api_base_url, session_id):
+            raise BootstrapError("pending device enrollment poll URL did not match the configured API")
+        _validate_pending_callback_approval_url(
+            {"approval_url": approval_url}, _hosted_enrollment_routes(context.dashboard_base_url)
+        )
     poll_url_parts = _validate_http_url(poll_url, "pending host enrollment poll URL")
     _validate_worker_transport(poll_url_parts, "pending host enrollment poll URL")
     return EnrollmentSession(
@@ -285,7 +294,19 @@ def _pending_enrollment_session(context: EnrollmentContext, state: dict[str, Jso
         poll_url=poll_url,
         expires_at=expires_at,
         poll_interval_seconds=poll_interval_seconds,
+        hosted_api_base_url=hosted_api_base_url,
+        approval_url=approval_url,
     )
+
+
+def _device_poll_url(api_base_url: str, session_id: str) -> str:
+    """Derive the proof destination from trusted configuration and a UUID."""
+
+    try:
+        normalized_id = str(uuid.UUID(session_id))
+    except ValueError as exc:
+        raise BootstrapError("device enrollment response has invalid session_id") from exc
+    return f"{api_base_url}/v1/instruction-hub/host-enrollments/sessions/{normalized_id}/poll"
 
 
 def _create_enrollment_session(context: EnrollmentContext) -> EnrollmentSessionAttempt:
@@ -449,6 +470,8 @@ def _enrollment_session_from_callback(context: EnrollmentContext, payload: dict[
 
 
 def _validate_pending_callback_approval_url(payload: dict[str, str], routes: HostedEnrollmentRoutes) -> str:
+    if any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in payload.get("approval_url", "")):
+        raise BootstrapError("host enrollment approval URL must not contain control characters")
     approval_url = _non_empty(payload.get("approval_url"))
     if approval_url is None:
         raise BootstrapError("host enrollment pending callback missing approval URL")
@@ -480,6 +503,9 @@ def _store_pending_enrollment(
             "target": context.metadata.target,
             "worker_base_url": context.worker_base_url,
         }
+        if session.hosted_api_base_url is not None:
+            pending_enrollments[_credential_cache_key(context)]["hosted_api_base_url"] = session.hosted_api_base_url
+            pending_enrollments[_credential_cache_key(context)]["approval_url"] = session.approval_url
         state["pending_enrollments"] = pending_enrollments
         _write_state(state_path, state)
         return session, True
@@ -488,11 +514,15 @@ def _store_pending_enrollment(
 def _poll_enrollment_session(context: EnrollmentContext, session: EnrollmentSession) -> EnrollmentAttempt:
     deadline = time.monotonic() + ENROLLMENT_POLL_DEADLINE_SECONDS
     while True:
+        if session.expires_at <= dt.datetime.now(dt.timezone.utc):
+            _forget_pending_enrollment(context)
+            return EnrollmentAttempt(credential=None, reason="approval_expired")
         response = _post_json_response(
             session.poll_url,
             None,
             {"device_code": session.device_code},
             label="host enrollment poll response",
+            allow_redirects=session.hosted_api_base_url is None,
         )
         status = _string_value(response.get("status"))
         if status == "approved":
@@ -515,7 +545,8 @@ def _poll_enrollment_session(context: EnrollmentContext, session: EnrollmentSess
         remaining_seconds = deadline - time.monotonic()
         if remaining_seconds <= 0:
             return EnrollmentAttempt(credential=None, reason="approval_pending")
-        time.sleep(min(float(session.poll_interval_seconds), remaining_seconds))
+        expiry_seconds = (session.expires_at - dt.datetime.now(dt.timezone.utc)).total_seconds()
+        time.sleep(max(0.0, min(float(session.poll_interval_seconds), remaining_seconds, expiry_seconds)))
 
 
 def _store_host_credential(
