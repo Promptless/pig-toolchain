@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from collections.abc import Iterator
 
@@ -233,7 +234,7 @@ def test_transient_result_reads_preserve_retry_and_defer_terminal_event(
     assert b"keep this message" in before
     assert b"session_end" not in before
     state = json.loads((cursor_capture.spool_root() / "scan-state.json").read_text())
-    assert state["offsets"]["session"] == 1
+    assert state["traversals"]["session"]["offsets"]["session"] == 1
     exported = cursor_capture.prepare_journals(context, "session_end")
     assert exported.complete
     assert exported.context.transcript_path is not None
@@ -298,6 +299,69 @@ def test_missing_bubble_is_reported_and_retried(database: sqlite3.Connection) ->
     assert page.records[0]["capture"]["completeness"] == "missing"
     put(database, "bubbleId:session:pending", {"type": 1, "text": "saved"})
     assert cursor_database.read_session("session", deadline=time.monotonic() + 0.5).complete
+
+
+@pytest.mark.parametrize("missing_indices", [(0,), (2,), (0, 2)])
+def test_missing_bubble_across_pages_delays_terminal_until_recovered(
+    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, missing_indices: tuple[int, ...]
+) -> None:
+    monkeypatch.setattr(cursor_database, "PAGE_SIZE", 2)
+    put(
+        database,
+        "composerData:session",
+        {"fullConversationHeadersOnly": [{"bubbleId": str(index)} for index in range(5)]},
+    )
+    for index in range(5):
+        if index not in missing_indices:
+            put(database, f"bubbleId:session:{index}", {"type": 1, "text": str(index)})
+    context = HookTraceContext(
+        session_id="session",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    for _ in range(4):
+        export = cursor_capture.prepare_journals(context, "session_end")
+        assert not export.complete
+        assert export.context.transcript_path is not None
+        assert "session_end" not in export.context.transcript_path.read_text()
+
+    # A missing header must not prevent later pages from reaching the journal.
+    assert export.context.transcript_path is not None
+    rows = [json.loads(line) for line in export.context.transcript_path.read_text().splitlines()]
+    messages = [row["event"]["text"] for row in rows if row["event"]["kind"] == "user_message"]
+    assert sorted(messages) == [str(index) for index in range(5) if index not in missing_indices]
+
+    put(
+        database,
+        "composerData:session",
+        {"fullConversationHeadersOnly": [{"bubbleId": str(index)} for index in range(6)]},
+    )
+    put(database, "bubbleId:session:5", {"type": 1, "text": "appended"})
+    for _ in range(3):
+        export = cursor_capture.prepare_journals(context, "session_end")
+        assert not export.complete
+        assert export.context.transcript_path is not None
+        assert "session_end" not in export.context.transcript_path.read_text()
+    assert export.context.transcript_path is not None
+    before = export.context.transcript_path.read_bytes()
+    assert b"appended" in before
+
+    for index in missing_indices:
+        put(database, f"bubbleId:session:{index}", {"type": 1, "text": str(index)})
+    for _ in range(6):
+        export = cursor_capture.prepare_journals(context, "session_end")
+        if export.complete:
+            break
+    assert export.complete
+    assert export.context.transcript_path is not None
+    assert export.context.transcript_path.read_bytes().startswith(before)
+    rows = [json.loads(line) for line in export.context.transcript_path.read_text().splitlines()]
+    messages = [row["event"]["text"] for row in rows if row["event"]["kind"] == "user_message"]
+    assert sorted(messages) == [str(index) for index in range(5)] + ["appended"]
+    assert rows[-1]["event"]["name"] == "session_end"
 
 
 def test_pending_notification_survives_failed_upload(
@@ -522,6 +586,96 @@ def test_pages_resume_before_terminal_and_child_hook_never_closes_parent(
     assert rows[-1]["event"]["name"] == "subagent_stop"
 
 
+@pytest.mark.parametrize("nested", [False, True])
+def test_subagent_traversal_resumes_and_finishes_across_bounded_passes(
+    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, nested: bool
+) -> None:
+    monkeypatch.setattr(cursor_database, "PAGE_SIZE", 1)
+    children = [f"child-{index}" for index in range(16 if nested else 32)]
+    descendants = {child: [child + "-a", child + "-b"] if nested else [] for child in children}
+    sessions = {"parent": children, **descendants}
+    sessions.update({grandchild: [] for grandchildren in descendants.values() for grandchild in grandchildren})
+    for session_id, child_ids in sessions.items():
+        put(
+            database,
+            "composerData:" + session_id,
+            {"fullConversationHeadersOnly": [{"bubbleId": "a"}], "subagentComposerIds": child_ids},
+        )
+        put(database, f"bubbleId:{session_id}:a", {"type": 1, "text": session_id})
+    context = HookTraceContext(
+        session_id="parent",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    assert not cursor_capture.prepare_journals(context, "session_end").complete
+    put(
+        database,
+        "composerData:parent",
+        {"fullConversationHeadersOnly": [{"bubbleId": "a"}], "subagentComposerIds": [*children, "new-child"]},
+    )
+    put(database, "composerData:new-child", {"fullConversationHeadersOnly": [{"bubbleId": "a"}, {"bubbleId": "b"}]})
+    for bubble_id in ("a", "b"):
+        put(database, "bubbleId:new-child:" + bubble_id, {"type": 1, "text": bubble_id})
+    for _ in range(4):
+        export = cursor_capture.prepare_journals(context, "session_end")
+        if export.complete:
+            break
+    assert export.complete
+    journals = cursor_capture.spool_root() / "journals"
+    assert {path.stem for path in journals.glob("*.jsonl")} == set(sessions) | {"new-child"}
+    rows = [json.loads(line) for line in (journals / "new-child.jsonl").read_text().splitlines()]
+    assert [row["event"]["text"] for row in rows] == ["a", "b"]
+
+
+@pytest.mark.parametrize("checkpoint", [False, True])
+@pytest.mark.parametrize("change", ["message", "grandchild"])
+def test_completed_children_refresh_when_database_changes_between_passes(
+    database: sqlite3.Connection, checkpoint: bool, change: str
+) -> None:
+    children = [f"child-{index}" for index in range(32)]
+    put(database, "composerData:parent", {"fullConversationHeadersOnly": [], "subagentComposerIds": children})
+    for child in children:
+        put(database, "composerData:" + child, {"fullConversationHeadersOnly": [{"bubbleId": "a"}]})
+        put(database, f"bubbleId:{child}:a", {"type": 1, "text": "old"})
+    context = HookTraceContext(
+        session_id="parent",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    assert not cursor_capture.prepare_journals(context, "session_end").complete
+    if change == "message":
+        # Same-size updates without a composer change must invalidate the cache.
+        put(database, "bubbleId:child-0:a", {"type": 1, "text": "new"})
+    else:
+        put(
+            database,
+            "composerData:child-0",
+            {"fullConversationHeadersOnly": [{"bubbleId": "a"}], "subagentComposerIds": ["grandchild"]},
+        )
+        put(database, "composerData:grandchild", {"fullConversationHeadersOnly": [{"bubbleId": "a"}]})
+        put(database, "bubbleId:grandchild:a", {"type": 1, "text": "new descendant"})
+    if checkpoint:
+        database.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    for _ in range(4):
+        exported = cursor_capture.prepare_journals(context, "session_end")
+        if exported.complete:
+            break
+    assert exported.complete
+    journals = cursor_capture.spool_root() / "journals"
+    if change == "message":
+        rows = [json.loads(line) for line in (journals / "child-0.jsonl").read_text().splitlines()]
+        assert [row["event"]["text"] for row in rows] == ["old", "new"]
+    else:
+        assert "new descendant" in (journals / "grandchild.jsonl").read_text()
+
+
 def test_cursor_hooks_detach_slow_work_and_close_output_pipes(tmp_path: Path) -> None:
     node = shutil.which("node")
     if node is None:
@@ -578,6 +732,184 @@ def test_unsaved_session_remains_pending(database: sqlite3.Connection) -> None:
     exported = cursor_capture.prepare_journals(context, "session_end")
     assert not exported.complete
     assert not list((cursor_capture.spool_root() / "journals").glob("*.jsonl"))
+
+
+@pytest.mark.parametrize("discovered", [False, True])
+def test_pending_subagent_does_not_prevent_sessions_refreshing(
+    database: sqlite3.Connection, tmp_path: Path, discovered: bool
+) -> None:
+    if discovered:
+        transcript = tmp_path / "transcripts" / "idle.jsonl"
+        transcript.parent.mkdir()
+        transcript.touch()
+    put(
+        database,
+        "composerData:parent",
+        {"fullConversationHeadersOnly": [], "subagentComposerIds": ["missing"] if discovered else ["missing", "idle"]},
+    )
+    put(database, "composerData:idle", {"fullConversationHeadersOnly": [{"bubbleId": "a"}]})
+    context = HookTraceContext(
+        session_id="parent",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    for text in ("old", "new"):
+        put(database, "bubbleId:idle:a", {"type": 1, "text": text})
+        assert not cursor_capture.prepare_journals(context, "session_end").complete
+    path = cursor_capture.spool_root() / "journals" / "idle.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [row["event"]["text"] for row in rows] == ["old", "new"]
+
+
+def test_unrelated_pending_session_does_not_block_notification_completion(database: sqlite3.Connection) -> None:
+    def context(session_id: str) -> HookTraceContext:
+        return HookTraceContext(
+            session_id=session_id,
+            transcript_path=None,
+            agent_transcript_path=None,
+            parent_session_id=None,
+            agent_id=None,
+            agent_type=None,
+        )
+
+    assert not cursor_capture.prepare_journals(context("unsaved"), "session_end").complete
+    put(database, "composerData:saved", {"fullConversationHeadersOnly": [{"bubbleId": "a"}]})
+    put(database, "bubbleId:saved:a", {"type": 1, "text": "saved message"})
+    for _ in range(3):
+        assert cursor_capture.prepare_journals(context("saved"), "session_end").complete
+    assert not cursor_capture.prepare_journals(context("unsaved"), "session_end").complete
+    put(database, "composerData:unsaved", {"fullConversationHeadersOnly": [{"bubbleId": "a"}]})
+    put(database, "bubbleId:unsaved:a", {"type": 1, "text": "recovered message"})
+    assert cursor_capture.prepare_journals(context("unsaved"), "session_end").complete
+    assert "recovered message" in (cursor_capture.spool_root() / "journals/unsaved.jsonl").read_text()
+
+
+def test_unrelated_discovery_retries_do_not_block_notification_completion(
+    database: sqlite3.Connection, tmp_path: Path
+) -> None:
+    transcripts = tmp_path / "transcripts"
+    transcripts.mkdir()
+    for index in range(41):
+        session = f"idle-{index:02}"
+        (transcripts / f"{session}.jsonl").touch()
+        if index:
+            put(database, "composerData:" + session, {"fullConversationHeadersOnly": []})
+    put(database, "composerData:subject", {"fullConversationHeadersOnly": []})
+    context = HookTraceContext(
+        session_id="subject",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    for _ in range(4):
+        assert cursor_capture.prepare_journals(context, "session_end").complete
+    put(database, "composerData:idle-00", {"fullConversationHeadersOnly": [{"bubbleId": "a"}]})
+    put(database, "bubbleId:idle-00:a", {"type": 1, "text": "background recovered"})
+    assert cursor_capture.prepare_journals(context, "session_end").complete
+    assert "background recovered" in (cursor_capture.spool_root() / "journals/idle-00.jsonl").read_text()
+
+
+def test_failed_child_journal_does_not_lose_parent_page_progress(
+    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cursor_database, "PAGE_SIZE", 1)
+    monkeypatch.setattr(cursor_capture, "MAX_JOURNAL", 8192)
+    put(
+        database,
+        "composerData:parent",
+        {
+            "fullConversationHeadersOnly": [{"bubbleId": str(index)} for index in range(3)],
+            "subagentComposerIds": ["child"],
+        },
+    )
+    for index in range(3):
+        put(database, f"bubbleId:parent:{index}", {"type": 1, "text": str(index)})
+    put(database, "composerData:child", {"fullConversationHeadersOnly": [{"bubbleId": "a"}]})
+    put(database, "bubbleId:child:a", {"type": 1, "text": "child"})
+    journals = cursor_capture.spool_root() / "journals"
+    journals.mkdir(parents=True)
+    (journals / "child.jsonl").write_bytes(b"\n" * 8193)
+    context = HookTraceContext(
+        session_id="parent",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    for _ in range(3):
+        assert not cursor_capture.prepare_journals(context, "session_end").complete
+    rows = [json.loads(line) for line in (journals / "parent.jsonl").read_text().splitlines()]
+    assert [row["event"]["text"] for row in rows if row["event"]["kind"] == "user_message"] == ["0", "1", "2"]
+    diagnostics = json.loads((cursor_capture.spool_root() / "diagnostics.json").read_text())
+    assert diagnostics["errors"]["journal_write"] == 1
+    (journals / "child.jsonl").unlink()
+    for _ in range(3):
+        exported = cursor_capture.prepare_journals(context, "session_end")
+        if exported.complete:
+            break
+    assert exported.complete
+    assert "child" in (journals / "child.jsonl").read_text()
+
+
+def test_discovered_child_does_not_block_required_traversal(
+    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cursor_database, "PAGE_SIZE", 1)
+    transcripts = tmp_path / "transcripts"
+    transcripts.mkdir()
+    (transcripts / "child.jsonl").touch()
+    put(database, "composerData:parent", {"fullConversationHeadersOnly": [], "subagentComposerIds": ["child"]})
+    put(database, "composerData:child", {"fullConversationHeadersOnly": [{"bubbleId": str(i)} for i in range(4)]})
+    for index in range(4):
+        put(database, f"bubbleId:child:{index}", {"type": 1, "text": str(index)})
+    context = HookTraceContext(
+        session_id="parent",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    for _ in range(6):
+        exported = cursor_capture.prepare_journals(context, "session_end")
+        if exported.complete:
+            break
+    assert exported.complete
+    rows = [
+        json.loads(line) for line in (cursor_capture.spool_root() / "journals/child.jsonl").read_text().splitlines()
+    ]
+    assert [row["event"]["text"] for row in rows] == ["0", "1", "2", "3"]
+
+
+def test_overlapping_notifications_advance_independently(
+    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cursor_database, "PAGE_SIZE", 1)
+    put(database, "composerData:parent", {"fullConversationHeadersOnly": [], "subagentComposerIds": ["child"]})
+    put(database, "composerData:child", {"fullConversationHeadersOnly": [{"bubbleId": str(i)} for i in range(4)]})
+    for index in range(4):
+        put(database, f"bubbleId:child:{index}", {"type": 1, "text": str(index)})
+    parent = HookTraceContext(
+        session_id="parent",
+        transcript_path=None,
+        agent_transcript_path=None,
+        parent_session_id=None,
+        agent_id=None,
+        agent_type=None,
+    )
+    child = replace(parent, session_id="child")
+    for _ in range(6):
+        exported = cursor_capture.prepare_journals(parent, "session_end")
+        cursor_capture.prepare_journals(child, "session_end")
+        if exported.complete:
+            break
+    assert exported.complete
 
 
 def test_cursor_collect_uploads_only_acknowledged_journal_ranges(tmp_path: Path) -> None:
