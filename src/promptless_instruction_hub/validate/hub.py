@@ -16,6 +16,7 @@ from promptless_instruction_hub.errors import InstructionHubError
 from promptless_instruction_hub.hook_definitions import validate_hook_definition
 from promptless_instruction_hub.managed_skills import MANAGED_SKILL_SOURCES
 from promptless_instruction_hub.mcp_config import read_mcp_servers
+from promptless_instruction_hub.render.mcp import collect_mcp_servers
 from promptless_instruction_hub.models import (
     PIG_PLUGIN_ID,
     UPDATE_INSTRUCTION_HUB_SKILL_ID,
@@ -75,6 +76,7 @@ def validate_hub(hub_root: Path) -> ValidationResult[HubPluginDefinition]:
     for target in config.targets:
         for plugin in stable_plugins:
             _validate_invocation_destinations(plugin, target)
+            collect_mcp_servers(target, list(plugin.assets))
     warnings = _validate_agent_skills(config, assets, stable_plugins)
     return ValidationResult(
         config=config,
