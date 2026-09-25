@@ -796,11 +796,21 @@ acknowledgement at the same atomic boundary.
 
 The runtime uploads native host transcript JSONL ranges to
 `/v0/traces/batches?target=...`. Claude Code, Codex, Claude Desktop, and Cursor
-share one uploader and forward-only ledger. Cursor exports saved database
-observations to append-only JSONL journals before uploading. The ledger lives at
-`~/.promptless/instruction-hub/host-runtime-ledger.json` or
-`PROMPTLESS_HOST_RUNTIME_LEDGER` when set. Uploads use the host credential and
-are gated by the `enabled_hosts` policy. Codex idle discovery scans only
+share one uploader with separate forward-only acknowledgment ledgers for each
+worker URL, deployment, enrolled host identity, and transcript source. Switching
+destinations starts that destination's upload history at byte zero; switching
+back resumes its own acknowledged progress. Credential renewal or a local reset
+that preserves the host identity does not erase progress.
+
+Ledger filenames include a scope hash beside the base path
+`~/.promptless/instruction-hub/host-runtime-ledger.json`, or beside
+`PROMPTLESS_HOST_RUNTIME_LEDGER` when set. The override selects a base filename,
+not one shared acknowledgment file. Old unscoped ledgers are left untouched and
+are not adopted because their destination cannot be determined. On the first
+upload after this change, the worker reconciles any already committed ranges.
+Cursor's append-only capture journals remain shared locally; each destination
+acknowledges them separately. Uploads use the host credential and are gated by
+the `enabled_hosts` policy. Codex idle discovery scans only
 `CODEX_HOME/sessions/**/*.jsonl` and
 `CODEX_HOME/archived_sessions/**/*.jsonl`. Hook-provided current transcript
 paths remain eligible outside those roots.

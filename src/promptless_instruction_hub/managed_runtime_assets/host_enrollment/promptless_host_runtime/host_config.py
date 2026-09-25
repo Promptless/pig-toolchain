@@ -26,7 +26,7 @@ from .contracts import (
 from .cursor import capture as cursor_capture
 from .cursor import database as cursor_database
 from .redaction import _redact_text
-from .storage import _atomic_write_text, _ledger_path
+from .storage import _atomic_write_text
 from .validation import _non_empty, _string_value
 
 
@@ -139,7 +139,7 @@ def _claude_desktop_config_status() -> dict[str, JsonValue]:
     }
 
 
-def _ensure_host_config(host: Host, *, trace_upload_endpoint: str) -> ConfigResult:
+def _ensure_host_config(host: Host, *, trace_upload_endpoint: str, source_ledger_path: Path) -> ConfigResult:
     """Remove telemetry config written by earlier managed bootstraps.
 
     Native trace collection needs no host-side telemetry config: the plugin
@@ -154,17 +154,23 @@ def _ensure_host_config(host: Host, *, trace_upload_endpoint: str) -> ConfigResu
             needs_restart=False,
             drift_reports=[],
             effective_config=_effective_config(
-                "cursor", configured=True, managed_config_detected=False, trace_upload_endpoint=trace_upload_endpoint
+                "cursor",
+                configured=True,
+                managed_config_detected=False,
+                trace_upload_endpoint=trace_upload_endpoint,
+                source_ledger_path=source_ledger_path,
             ),
         )
     if host == "codex":
-        return _ensure_codex_config(trace_upload_endpoint=trace_upload_endpoint)
+        return _ensure_codex_config(trace_upload_endpoint=trace_upload_endpoint, source_ledger_path=source_ledger_path)
     if host == "claude":
-        return _ensure_claude_config(trace_upload_endpoint=trace_upload_endpoint)
-    return _ensure_claude_desktop_config(trace_upload_endpoint=trace_upload_endpoint)
+        return _ensure_claude_config(trace_upload_endpoint=trace_upload_endpoint, source_ledger_path=source_ledger_path)
+    return _ensure_claude_desktop_config(
+        trace_upload_endpoint=trace_upload_endpoint, source_ledger_path=source_ledger_path
+    )
 
 
-def _ensure_codex_config(*, trace_upload_endpoint: str) -> ConfigResult:
+def _ensure_codex_config(*, trace_upload_endpoint: str, source_ledger_path: Path) -> ConfigResult:
     config_path = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser() / "config.toml"
     existing = config_path.read_text() if config_path.exists() else ""
     if _has_malformed_managed_blocks(existing):
@@ -174,6 +180,7 @@ def _ensure_codex_config(*, trace_upload_endpoint: str) -> ConfigResult:
             message="Existing Codex managed telemetry markers are malformed",
             details={"path": str(config_path)},
             trace_upload_endpoint=trace_upload_endpoint,
+            source_ledger_path=source_ledger_path,
         )
     updated = _without_managed_block(existing)
     changed = updated != existing
@@ -187,6 +194,7 @@ def _ensure_codex_config(*, trace_upload_endpoint: str) -> ConfigResult:
             configured=True,
             managed_config_detected=changed,
             trace_upload_endpoint=trace_upload_endpoint,
+            source_ledger_path=source_ledger_path,
         ),
         drift_reports=_removed_config_reports("codex", config_path, changed),
     )
@@ -210,7 +218,7 @@ def _managed_block_pattern() -> re.Pattern[str]:
     return re.compile(re.escape(MANAGED_BEGIN) + r".*?" + re.escape(MANAGED_END) + r"\n?", re.DOTALL)
 
 
-def _ensure_claude_config(*, trace_upload_endpoint: str) -> ConfigResult:
+def _ensure_claude_config(*, trace_upload_endpoint: str, source_ledger_path: Path) -> ConfigResult:
     settings_path = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser() / "settings.json"
     settings = _read_settings(settings_path) if settings_path.exists() else {}
     env = settings.get("env")
@@ -232,12 +240,13 @@ def _ensure_claude_config(*, trace_upload_endpoint: str) -> ConfigResult:
             configured=True,
             managed_config_detected=changed,
             trace_upload_endpoint=trace_upload_endpoint,
+            source_ledger_path=source_ledger_path,
         ),
         drift_reports=_removed_config_reports("claude", settings_path, changed),
     )
 
 
-def _ensure_claude_desktop_config(*, trace_upload_endpoint: str) -> ConfigResult:
+def _ensure_claude_desktop_config(*, trace_upload_endpoint: str, source_ledger_path: Path) -> ConfigResult:
     return ConfigResult(
         status="configured",
         needs_restart=False,
@@ -246,6 +255,7 @@ def _ensure_claude_desktop_config(*, trace_upload_endpoint: str) -> ConfigResult
             configured=True,
             managed_config_detected=False,
             trace_upload_endpoint=trace_upload_endpoint,
+            source_ledger_path=source_ledger_path,
         ),
         drift_reports=[],
     )
@@ -276,6 +286,7 @@ def _effective_config(
     configured: bool,
     managed_config_detected: bool,
     trace_upload_endpoint: str,
+    source_ledger_path: Path,
 ) -> dict[str, JsonValue]:
     # Mirrors the worker's HostConfigState check-in contract.
     effective_config: dict[str, JsonValue] = {
@@ -283,7 +294,7 @@ def _effective_config(
         "configured": configured,
         "trace_upload_endpoint": trace_upload_endpoint if configured else None,
         "native_root_count": len(_native_trace_globs(host)),
-        "source_ledger_path": str(_ledger_path()),
+        "source_ledger_path": str(source_ledger_path),
         "managed_config_detected": managed_config_detected,
     }
     effective_config["config_hash"] = hashlib.sha256(json.dumps(effective_config, sort_keys=True).encode()).hexdigest()
@@ -297,6 +308,7 @@ def _blocked_result(
     message: str,
     details: dict[str, JsonValue],
     trace_upload_endpoint: str,
+    source_ledger_path: Path,
 ) -> ConfigResult:
     return ConfigResult(
         status="blocked",
@@ -306,6 +318,7 @@ def _blocked_result(
             configured=False,
             managed_config_detected=False,
             trace_upload_endpoint=trace_upload_endpoint,
+            source_ledger_path=source_ledger_path,
         ),
         drift_reports=[
             {
