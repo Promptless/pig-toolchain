@@ -199,6 +199,54 @@ def test_legacy_directory_is_not_silently_ignored(tmp_path: Path) -> None:
         validate_hub(tmp_path)
 
 
+@pytest.mark.parametrize(
+    "extra_files",
+    [
+        {"packages/app/package.json": '{"name":"app"}\n', "packages/app/index.js": "export default 1;\n"},
+        {"packages/workspace.yaml": "packages:\n  - app\n"},
+        {"packages/unrelated.yaml": "[invalid: yaml"},
+        {"packages/unrelated.yaml": "- a\n- b\n"},
+        {"packages/app/metadata.yaml": "id: app\nname: Application\n"},
+        {},
+    ],
+    ids=["monorepo", "workspace-yaml", "malformed-yaml", "yaml-list", "nested-metadata", "empty-directory"],
+)
+def test_customer_packages_directory_survives_init_and_verify(tmp_path: Path, extra_files: dict[str, str]) -> None:
+    (tmp_path / "packages").mkdir()
+    for name, content in extra_files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+
+    assert main(["init", "--hub", str(tmp_path), "--org", "Acme"]) == 0
+    assert main(["verify", "--hub", str(tmp_path)]) == 0
+
+    for name, content in extra_files.items():
+        assert (tmp_path / name).read_text() == content
+
+
+@pytest.mark.parametrize("command", ["init", "validate", "verify", "build", "scan"])
+@pytest.mark.parametrize("definition", ["id: old\nname: Old\n", "id: old\nname: Old\nincludes: []\n"])
+def test_legacy_package_definitions_rejected_before_writes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], command: str, definition: str
+) -> None:
+    init_hub(tmp_path, org="Acme")
+    (tmp_path / "packages").mkdir()
+    legacy = tmp_path / "packages/old.yaml"
+    legacy.write_text(definition)
+    before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+
+    args = [command, "--hub", str(tmp_path)]
+    if command == "init":
+        args.extend(["--org", "Acme"])
+    assert main(args) == 1
+
+    error = capsys.readouterr().err
+    assert "legacy plugin directory" in error
+    assert str(legacy) in error
+    assert {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
+
+
 def test_duplicate_plugin_ids_are_rejected(tmp_path: Path) -> None:
     init_hub(tmp_path, org="Promptless")
     (tmp_path / "plugins/duplicate.yaml").write_text("id: pig\nname: Another PIG\n")
