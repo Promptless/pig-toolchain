@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 from jsonschema import Draft202012Validator
 
 from promptless_instruction_hub.cli import main
@@ -29,6 +30,22 @@ def test_reusable_workflows_run_caller_pinned_toolchain_ref(workflow_name: str) 
     assert "ref: ${{ steps.toolchain-ref.outputs.ref }}" in workflow_text
     assert "path: .promptless-pig-toolchain" in workflow_text
     assert "uses: ./.promptless-pig-toolchain" in workflow_text
+
+
+def test_publisher_identity_is_optional_and_used_only_by_publication() -> None:
+    workflow = yaml.load((WORKFLOWS / "publish.yml").read_text(), Loader=yaml.BaseLoader)
+    secret = workflow["on"]["workflow_call"]["secrets"]["publisher-token"]
+    assert secret["required"] == "false"
+    job = workflow["jobs"]["instruction-hub"]
+    assert job["permissions"]["contents"] == "write"
+    action = job["steps"][-1]
+    assert action["uses"] == "./.promptless-pig-toolchain"
+    assert action["with"]["mode"] == "publish"
+    assert action["with"]["github-token"] == "${{ secrets.publisher-token || github.token }}"
+    for step in job["steps"][:-1]:
+        assert "secrets.publisher-token" not in json.dumps(step)
+        if step.get("uses", "").startswith("actions/checkout@"):
+            assert step["with"]["persist-credentials"] == "false"
 
 
 def test_cli_init_scan_verify_build_validate_and_status(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
