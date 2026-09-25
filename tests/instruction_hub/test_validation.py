@@ -306,6 +306,142 @@ def test_validate_accepts_env_placeholder_mcp_arg_values(tmp_path: Path) -> None
     validate_hub(hub_root)
 
 
+@pytest.mark.parametrize("header", ["Authorization", "Proxy-Authorization"])
+@pytest.mark.parametrize(
+    "value",
+    ["${MCP_TOKEN}", "Bearer ${MCP_TOKEN}", "basic ${MCP_TOKEN}", "Bearer ${env:MCP_TOKEN}", "${env:api-key}"],
+)
+def test_validate_accepts_mcp_authorization_env_references(tmp_path: Path, header: str, value: str) -> None:
+    hub_root = tmp_path / "hub"
+    init_hub(hub_root, org="Acme")
+    (hub_root / "assets/mcps/good.json").write_text(
+        json.dumps({"mcpServers": {"docs": {"url": "https://example.invalid/mcp", "headers": {header: value}}}})
+    )
+
+    validate_hub(hub_root)
+
+
+@pytest.mark.parametrize(
+    "server_name", ["tokenizer", "secretary", "token-service", "api_keys", "private_keys", "apikeys"]
+)
+def test_validate_does_not_treat_mcp_server_names_as_credentials(tmp_path: Path, server_name: str) -> None:
+    hub_root = tmp_path / "hub"
+    init_hub(hub_root, org="Acme")
+    (hub_root / "assets/mcps/good.json").write_text(
+        json.dumps({"mcpServers": {server_name: {"command": "npx", "args": ["-y", "tokenizer-mcp"]}}})
+    )
+
+    validate_hub(hub_root)
+
+
+@pytest.mark.parametrize(
+    "credential",
+    [
+        "${}",
+        "${TOKEN:-literal-secret}",
+        "${TOKEN}literal-secret",
+        "${A}${B}",
+        "${TOKEN}\n",
+        "env:TOKEN literal-secret",
+        "Bearer literal-secret",
+        "Bearer ${TOKEN}literal-secret",
+        "Bearer ${TOKEN:-literal-secret}",
+    ],
+)
+def test_validate_rejects_literal_or_malformed_authorization_values(tmp_path: Path, credential: str) -> None:
+    hub_root = tmp_path / "hub"
+    init_hub(hub_root, org="Acme")
+    (hub_root / "assets/mcps/bad.json").write_text(
+        json.dumps(
+            {"mcpServers": {"docs": {"url": "https://example.invalid", "headers": {"Authorization": credential}}}}
+        )
+    )
+
+    with pytest.raises(InstructionHubError, match="literal secret"):
+        validate_hub(hub_root)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "apiKey",
+        "APIKey",
+        "clientSecret",
+        "refreshToken",
+        "privateKey",
+        "MCP_API_KEY",
+        "AWSSecretAccessKey",
+        "PGPASSWORD",
+        "SYSTEM_ACCESSTOKEN",
+        "CLIENTSECRET",
+        "REFRESHTOKEN",
+        "PRIVATEKEY",
+        "AWS_SECRETACCESSKEY",
+    ],
+)
+def test_validate_still_rejects_literal_credential_fields(tmp_path: Path, field: str) -> None:
+    hub_root = tmp_path / "hub"
+    init_hub(hub_root, org="Acme")
+    (hub_root / "assets/mcps/bad.json").write_text(
+        json.dumps({"mcpServers": {"tokenizer": {"command": "npx", "env": {field: "literal-secret"}}}})
+    )
+
+    with pytest.raises(InstructionHubError, match="literal secret"):
+        validate_hub(hub_root)
+
+
+@pytest.mark.parametrize("value", ["${DATABASE_PASSWORD}", "${env:DATABASE_PASSWORD}"])
+@pytest.mark.parametrize(
+    "field", ["PGPASSWORD", "SYSTEM_ACCESSTOKEN", "CLIENTSECRET", "REFRESHTOKEN", "PRIVATEKEY", "AWS_SECRETACCESSKEY"]
+)
+def test_validate_accepts_credential_environment_references(tmp_path: Path, value: str, field: str) -> None:
+    hub_root = tmp_path / "hub"
+    init_hub(hub_root, org="Acme")
+    (hub_root / "assets/mcps/postgres.json").write_text(
+        json.dumps({"mcpServers": {"postgres": {"command": "postgres-mcp", "env": {field: value}}}})
+    )
+
+    validate_hub(hub_root)
+
+
+@pytest.mark.parametrize("payload", [{"tokens": ["literal-secret"]}, {"api_key": {"value": "literal-secret"}}])
+def test_validate_still_rejects_wrapped_literal_credentials(tmp_path: Path, payload: object) -> None:
+    hub_root = tmp_path / "hub"
+    init_hub(hub_root, org="Acme")
+    skill_root = hub_root / "assets/skills/example"
+    skill_root.mkdir()
+    (skill_root / "SKILL.md").write_text("# Example\n")
+    (skill_root / "config.json").write_text(json.dumps(payload))
+
+    with pytest.raises(InstructionHubError, match="literal secret"):
+        validate_hub(hub_root)
+
+
+@pytest.mark.parametrize(
+    "field", ["api_keys", "private_keys", "apikeys", "apiKeys", "privateKeys", "API_KEYS", "PRIVATEKEYS"]
+)
+@pytest.mark.parametrize("shape", ["list", "value", "default", "wrapped-items"])
+@pytest.mark.parametrize("credential", ["literal-secret", "${MCP_SECRET}", "${env:MCP_SECRET}"])
+def test_validate_checks_plural_credential_collections(tmp_path: Path, field: str, shape: str, credential: str) -> None:
+    hub_root = tmp_path / "hub"
+    init_hub(hub_root, org="Acme")
+    skill_root = hub_root / "assets/skills/example"
+    skill_root.mkdir()
+    (skill_root / "SKILL.md").write_text("# Example\n")
+    value: object = [[credential]]
+    if shape in {"value", "default"}:
+        value = {shape: value}
+    elif shape == "wrapped-items":
+        value = [{"value": [credential]}, {"default": [credential]}]
+    (skill_root / "config.json").write_text(json.dumps({field: value}))
+
+    if credential == "literal-secret":
+        with pytest.raises(InstructionHubError, match="literal secret"):
+            validate_hub(hub_root)
+    else:
+        validate_hub(hub_root)
+
+
 @pytest.mark.parametrize(
     "payload",
     [
