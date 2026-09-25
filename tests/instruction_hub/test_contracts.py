@@ -31,6 +31,21 @@ def test_reusable_workflows_run_caller_pinned_toolchain_ref(workflow_name: str) 
     assert "uses: ./.promptless-pig-toolchain" in workflow_text
 
 
+@pytest.mark.parametrize("workflow_name", ["pr-check.yml", "publish.yml"])
+def test_reusable_workflows_forward_private_plugin_secret(workflow_name: str) -> None:
+    import yaml
+
+    workflow = yaml.safe_load((WORKFLOWS / workflow_name).read_text())
+    # PyYAML's YAML 1.1 loader reads the GitHub Actions `on` key as True.
+    declaration = workflow[True]["workflow_call"]["secrets"]["external-plugin-credentials"]
+    assert declaration["required"] is False
+    action_step = workflow["jobs"]["instruction-hub"]["steps"][-1]
+    assert action_step["with"]["external-plugin-credentials"] == "${{ secrets.external-plugin-credentials }}"
+    action = yaml.safe_load((WORKFLOWS.parents[1] / "action.yml").read_text())
+    runtime_step = action["runs"]["steps"][-1]
+    assert runtime_step["env"]["PIG_EXTERNAL_PLUGIN_CREDENTIALS"] == "${{ inputs.external-plugin-credentials }}"
+
+
 def test_cli_init_scan_verify_build_validate_and_status(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     hub_root = tmp_path / "hub"
 
