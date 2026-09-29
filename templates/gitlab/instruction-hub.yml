@@ -1,5 +1,9 @@
 spec:
   inputs:
+    hub-root:
+      description: Hub directory relative to the checkout; use . for the repository root.
+      default: .
+      regex: '^(\.|[A-Za-z0-9_.-]*[A-Za-z0-9_-][A-Za-z0-9_.-]*(/[A-Za-z0-9_.-]*[A-Za-z0-9_-][A-Za-z0-9_.-]*)*)$'
     toolchain-ref:
       description: Use main for the latest merged toolchain.
       default: main
@@ -18,10 +22,22 @@ spec:
   image: python:3.13-bookworm
   variables:
     GIT_DEPTH: "0"
+    INSTRUCTION_HUB_ROOT: $[[ inputs.hub-root ]]
     INSTRUCTION_HUB_TOOLCHAIN_REF: $[[ inputs.toolchain-ref ]]
     INSTRUCTION_HUB_RELEASE_BRANCH: $[[ inputs.release-branch ]]
     UV_VERSION: "0.8.14"
   before_script:
+    - |
+      export INSTRUCTION_HUB_ROOT='$[[ inputs.hub-root ]]'
+      python - <<'PY'
+      import os
+      from pathlib import Path
+
+      checkout = Path(os.environ["CI_PROJECT_DIR"]).resolve()
+      hub = checkout / os.environ["INSTRUCTION_HUB_ROOT"]
+      if not hub.is_dir() or hub.resolve() != hub:
+          raise SystemExit("hub-root must be an existing directory inside the checkout without symlink components")
+      PY
     - python -m pip install --disable-pip-version-check --no-cache-dir "uv==$UV_VERSION"
     - export INSTRUCTION_HUB_TOOLCHAIN_DIR="$(mktemp -d)"
     - git init --quiet "$INSTRUCTION_HUB_TOOLCHAIN_DIR"
@@ -39,17 +55,26 @@ instruction-hub-check:
       GITHUB_ACTION_PATH="$INSTRUCTION_HUB_TOOLCHAIN_DIR" \
       GITHUB_WORKSPACE="$CI_PROJECT_DIR" \
       INPUT_MODE=build \
-      INPUT_HUB_ROOT=. \
+      INPUT_HUB_ROOT="$INSTRUCTION_HUB_ROOT" \
         "$INSTRUCTION_HUB_TOOLCHAIN_DIR/scripts/run.sh"
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes: &hub-source
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $INSTRUCTION_HUB_ROOT == "."'
+      changes: &root-hub-source
         - .gitlab-ci.yml
         - .gitignore
         - hub.yaml
         - hub.repo-context.json
         - assets/**/*
         - plugins/**/*
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $INSTRUCTION_HUB_ROOT != "."'
+      changes: &nested-hub-source
+        - .gitlab-ci.yml
+        - .gitignore
+        - $[[ inputs.hub-root ]]/.gitignore
+        - $[[ inputs.hub-root ]]/hub.yaml
+        - $[[ inputs.hub-root ]]/hub.repo-context.json
+        - $[[ inputs.hub-root ]]/assets/**/*
+        - $[[ inputs.hub-root ]]/plugins/**/*
     - if: '$CI_PIPELINE_SOURCE == "web"'
 
 instruction-hub-publish:
@@ -65,8 +90,18 @@ instruction-hub-publish:
       test -z "${CI_COMMIT_TAG:-}"
       git fetch origin "+refs/heads/$CI_DEFAULT_BRANCH:refs/remotes/origin/$CI_DEFAULT_BRANCH"
       # A queued job must not replace a newer hub release with older source.
+      hub_prefix=""
+      if [ "$INSTRUCTION_HUB_ROOT" != . ]; then
+        hub_prefix="$INSTRUCTION_HUB_ROOT/"
+      fi
+      source_paths=(
+        ":(top,literal).gitlab-ci.yml" ":(top,literal).gitignore"
+        ":(top,literal)${hub_prefix}.gitignore"
+        ":(top,literal)${hub_prefix}hub.yaml" ":(top,literal)${hub_prefix}hub.repo-context.json"
+        ":(top,literal)${hub_prefix}assets" ":(top,literal)${hub_prefix}plugins"
+      )
       if git diff --quiet HEAD "origin/$CI_DEFAULT_BRANCH" -- \
-        .gitlab-ci.yml .gitignore hub.yaml hub.repo-context.json assets plugins; then
+        "${source_paths[@]}"; then
         # Include pointer-only commits from earlier publish jobs before pushing.
         git merge --ff-only "origin/$CI_DEFAULT_BRANCH"
       else
@@ -81,7 +116,7 @@ instruction-hub-publish:
       GITHUB_SERVER_URL="$CI_SERVER_URL" \
       GITHUB_REPOSITORY="$CI_PROJECT_PATH" \
       INPUT_MODE=publish \
-      INPUT_HUB_ROOT=. \
+      INPUT_HUB_ROOT="$INSTRUCTION_HUB_ROOT" \
       INPUT_RELEASE_BRANCH="$INSTRUCTION_HUB_RELEASE_BRANCH" \
       INPUT_SOURCE_BRANCH="$CI_DEFAULT_BRANCH" \
       INPUT_UPDATE_CURSOR_POINTER=true \
@@ -89,6 +124,8 @@ instruction-hub-publish:
       INPUT_COMMIT_USER_EMAIL="gitlab-ci@$CI_SERVER_HOST" \
         "$INSTRUCTION_HUB_TOOLCHAIN_DIR/scripts/run.sh"
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-      changes: *hub-source
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $INSTRUCTION_HUB_ROOT == "."'
+      changes: *root-hub-source
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $INSTRUCTION_HUB_ROOT != "."'
+      changes: *nested-hub-source
     - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
