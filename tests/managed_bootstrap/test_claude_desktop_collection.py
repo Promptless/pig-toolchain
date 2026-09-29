@@ -30,6 +30,7 @@ from .helpers import (
     _json_string,
     _run_collect,
     _run_runtime_json,
+    _scoped_ledger_path_for_test,
     _signed_policy,
 )
 
@@ -141,6 +142,9 @@ def test_claude_uploads_current_transcript_before_idle_history(tmp_path: Path) -
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "claude"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="claude"
+        )
         _seed_ledger_offsets(ledger_path, transcript_path, idle_path)
 
         transcript_extra = b'{"sessionId":"current","message":"stop"}\n'
@@ -385,6 +389,9 @@ def test_claude_desktop_collect_uploads_audit_jsonl_ranges(tmp_path: Path) -> No
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "claude-desktop"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="claude-desktop"
+        )
         assert server.session_requests[-1]["target"] == "claude"
 
         _run_collect(
@@ -418,7 +425,7 @@ def test_claude_desktop_collect_uploads_audit_jsonl_ranges(tmp_path: Path) -> No
         server.stop()
 
 
-def test_claude_and_desktop_collections_share_one_offset_ledger(tmp_path: Path) -> None:
+def test_claude_and_desktop_collections_keep_separate_offset_ledgers(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
@@ -443,6 +450,9 @@ def test_claude_and_desktop_collections_share_one_offset_ledger(tmp_path: Path) 
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "claude"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="claude"
+        )
         _run_runtime_json(plugin_root, ["enroll", "--host", "claude-desktop"], env)
 
         _run_collect(
@@ -478,7 +488,21 @@ def test_claude_and_desktop_collections_share_one_offset_ledger(tmp_path: Path) 
         ledger = _json_mapping(validate_json_value(json.loads(ledger_path.read_text()), "ledger"), "ledger")
         assert "host_baselines" not in ledger
         sources = _json_mapping(ledger["sources"], "ledger.sources")
-        assert len(sources) == 2
+        assert len(sources) == 1
+        desktop_ledger_path = _scoped_ledger_path_for_test(
+            Path(env["PROMPTLESS_HOST_RUNTIME_LEDGER"]),
+            home=home,
+            worker_base_url=server.base_url,
+            host="claude-desktop",
+        )
+        assert desktop_ledger_path != ledger_path
+        desktop_ledger = _json_mapping(
+            validate_json_value(json.loads(desktop_ledger_path.read_text()), "desktop ledger"), "desktop ledger"
+        )
+        desktop_sources = _json_mapping(desktop_ledger["sources"], "desktop sources")
+        assert len(desktop_sources) == 1
+        assert next(iter(sources.values()))["path"] == str(claude_path.resolve())
+        assert next(iter(desktop_sources.values()))["path"] == str(desktop_path.resolve())
         assert [request["target"] for request in server.session_requests] == ["claude"]
     finally:
         server.stop()
@@ -501,11 +525,8 @@ def test_concurrent_claude_collections_wait_for_shared_ledger_lock(tmp_path: Pat
         home = tmp_path / "home"
         ledger_path = tmp_path / "ledger.json"
         claude_path = home / ".claude/projects/project-1/session.jsonl"
-        desktop_path = _claude_desktop_audit_path(home, "claude-code-sessions", "session-1")
         claude_path.parent.mkdir(parents=True)
-        desktop_path.parent.mkdir(parents=True)
         claude_path.write_bytes(b'{"sessionId":"claude_session_1","message":"history"}\n')
-        desktop_path.write_bytes(b'{"sessionId":"desktop_session_1","message":"history"}\n')
         env = {
             "HOME": str(home),
             "CLAUDE_PLUGIN_ROOT": str(plugin_root),
@@ -514,20 +535,22 @@ def test_concurrent_claude_collections_wait_for_shared_ledger_lock(tmp_path: Pat
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "claude"], env)
-        _run_runtime_json(plugin_root, ["enroll", "--host", "claude-desktop"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="claude"
+        )
 
         lock_path = ledger_path.with_name(f"{ledger_path.name}.lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+b") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            for host in ("claude", "claude-desktop"):
+            for _ in range(2):
                 processes.append(
                     subprocess.Popen(
                         [
                             str(plugin_root / "runtime" / HOST_RUNTIME_BIN),
                             "collect",
                             "--host",
-                            host,
+                            "claude",
                             "--lifecycle",
                             "session_start",
                             "--include-active",
@@ -554,9 +577,9 @@ def test_concurrent_claude_collections_wait_for_shared_ledger_lock(tmp_path: Pat
 
         ledger = _json_mapping(validate_json_value(json.loads(ledger_path.read_text()), "ledger"), "ledger")
         assert "host_baselines" not in ledger
-        assert len(_json_mapping(ledger["sources"], "ledger.sources")) == 2
+        assert len(_json_mapping(ledger["sources"], "ledger.sources")) == 1
         assert len(server.policy_requests) == 2
-        assert {batch["host"] for batch in server.trace_batches} == {"claude", "claude-desktop"}
+        assert [batch["host"] for batch in server.trace_batches] == ["claude"]
     finally:
         for process in processes:
             if process.poll() is None:
@@ -591,6 +614,9 @@ def test_claude_session_start_supervisor_collects_code_and_desktop(tmp_path: Pat
             "PROMPTLESS_HOST_RUNTIME_LEDGER": str(ledger_path),
         }
         _run_runtime_json(plugin_root, ["enroll", "--host", "claude"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="claude"
+        )
         server.policy_requests.clear()
 
         result = subprocess.run(
@@ -695,6 +721,9 @@ def test_idle_collect_stops_waiting_for_ledger_lock_at_deadline(tmp_path: Path) 
             "PROMPTLESS_HOST_RUNTIME_COLLECT_DEADLINE_SECONDS": "0.1",
         }
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         server.policy_requests.clear()
 
         lock_path = ledger_path.with_name(f"{ledger_path.name}.lock")

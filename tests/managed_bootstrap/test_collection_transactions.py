@@ -32,7 +32,7 @@ from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptles
     _write_source_ledger,
 )
 
-from .helpers import _FakeWorkerServer, _diagnostic_log_entries, _run_runtime_json
+from .helpers import _FakeWorkerServer, _diagnostic_log_entries, _run_runtime_json, _scoped_ledger_path_for_test
 
 
 def _metadata(plugin_version: str = "1.0.0") -> RuntimeMetadata:
@@ -128,12 +128,15 @@ def test_current_transcript_ack_is_persisted_before_idle_discovery(
         previous_record = b'{"kind":"previous"}\n'
         current_record = b'{"kind":"current"}\n'
         transcript_path.write_bytes(previous_record + current_record)
-        _seed_offset(ledger_path, transcript_path, len(previous_record))
         runtime_env = _runtime_env(tmp_path, plugin_root, server, ledger_path)
         for key, value in runtime_env.items():
             monkeypatch.setenv(key, value)
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], runtime_env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(runtime_env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
+        _seed_offset(ledger_path, transcript_path, len(previous_record))
         idle_discovery_observed = False
 
         def observe_idle_discovery(
@@ -181,12 +184,15 @@ def test_first_current_transcript_lock_timeout_reports_partial(tmp_path: Path, m
         transcript_path = (tmp_path / "current.jsonl").resolve()
         previous_record = b'{"kind":"previous"}\n'
         transcript_path.write_bytes(previous_record + b'{"kind":"current"}\n')
-        _seed_offset(ledger_path, transcript_path, len(previous_record))
         runtime_env = _runtime_env(tmp_path, plugin_root, server, ledger_path)
         for key, value in runtime_env.items():
             monkeypatch.setenv(key, value)
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], runtime_env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(runtime_env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
+        _seed_offset(ledger_path, transcript_path, len(previous_record))
         lock_call_count = 0
 
         @contextmanager

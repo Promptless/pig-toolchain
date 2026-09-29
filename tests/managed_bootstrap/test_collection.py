@@ -28,6 +28,7 @@ from .helpers import (
     _json_string,
     _run_collect,
     _run_runtime_json,
+    _scoped_ledger_path_for_test,
 )
 
 
@@ -72,6 +73,9 @@ def test_collect_uploads_full_transcript_then_only_new_ranges(tmp_path: Path) ->
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _run_collect(
             plugin_root,
             ["collect", "--host", "codex", "--lifecycle", "session_start", "--quiet"],
@@ -159,6 +163,9 @@ def test_collect_with_no_sources_does_not_create_ledger(tmp_path: Path) -> None:
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _run_collect(
             plugin_root,
             ["collect", "--host", "codex", "--lifecycle", "session_start", "--quiet"],
@@ -196,6 +203,9 @@ def test_collect_ignores_codex_jsonl_outside_native_trace_roots(tmp_path: Path) 
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _run_collect(
             plugin_root,
             ["collect", "--host", "codex", "--lifecycle", "session_start", "--include-active", "--quiet"],
@@ -227,6 +237,18 @@ def test_collect_resumes_from_existing_ledger_offset(tmp_path: Path) -> None:
         transcript_path.write_bytes(first_record + appended_record)
         ledger_path = tmp_path / "ledger.json"
         source_path_hash = hashlib.sha256(str(transcript_path.resolve()).encode()).hexdigest()
+        env = {
+            "HOME": str(home),
+            "CODEX_HOME": str(codex_home),
+            "PLUGIN_ROOT": str(plugin_root),
+            "PROMPTLESS_WORKER_BASE_URL": server.base_url,
+            "PROMPTLESS_HOST_RUNTIME_LEDGER": str(ledger_path),
+        }
+
+        _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         ledger_path.write_text(
             json.dumps(
                 {
@@ -240,15 +262,6 @@ def test_collect_resumes_from_existing_ledger_offset(tmp_path: Path) -> None:
                 }
             )
         )
-        env = {
-            "HOME": str(home),
-            "CODEX_HOME": str(codex_home),
-            "PLUGIN_ROOT": str(plugin_root),
-            "PROMPTLESS_WORKER_BASE_URL": server.base_url,
-            "PROMPTLESS_HOST_RUNTIME_LEDGER": str(ledger_path),
-        }
-
-        _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
         _run_collect(
             plugin_root,
             ["collect", "--host", "codex", "--lifecycle", "session_start", "--quiet"],
@@ -296,6 +309,9 @@ def test_collect_uploads_new_ledger_sources_from_start(tmp_path: Path) -> None:
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         # The completed transcript uploads from offset 0 when no ACK exists yet.
         _run_collect(
             plugin_root,
@@ -381,6 +397,9 @@ def test_collect_recovers_when_worker_committed_an_upload_without_acknowledging_
         hook_context = {"session_id": "codex_session_1", "transcript_path": str(transcript_path)}
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _run_collect(
             plugin_root,
             ["collect", "--host", "codex", "--lifecycle", "session_start", "--quiet"],
@@ -445,6 +464,9 @@ def test_collect_include_active_uploads_recent_root_source_without_lifecycle(tmp
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _run_collect(
             plugin_root,
             ["collect", "--host", "codex", "--lifecycle", "session_start", "--quiet"],
@@ -498,6 +520,9 @@ def test_collect_uploads_subagent_transcript_with_parent_identity(tmp_path: Path
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _seed_ledger_offsets(ledger_path, agent_transcript_path)
         agent_transcript_path.write_bytes(first_record + second_record)
         _run_collect(
@@ -556,6 +581,9 @@ def test_collect_uploads_current_transcript_before_idle_history(tmp_path: Path) 
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _seed_ledger_offsets(ledger_path, transcript_path, idle_path)
         transcript_extra = b'{"kind":"stop"}\n'
         idle_extra = b'{"kind":"idle_tail"}\n'
@@ -619,6 +647,9 @@ def test_collect_reports_oversized_record_with_content_size_reason(tmp_path: Pat
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _seed_ledger_offsets(ledger_path, transcript_path)
         transcript_path.write_bytes(baseline_record + oversized_record + trailing_record)
         _run_collect(
@@ -675,6 +706,9 @@ def test_collect_reports_oversized_record_with_transport_size_reason(tmp_path: P
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _seed_ledger_offsets(ledger_path, transcript_path)
         transcript_path.write_bytes(baseline_record + incompressible_record + trailing_record)
         _run_collect(
@@ -738,6 +772,9 @@ def test_collect_splits_batches_by_transport_size(tmp_path: Path) -> None:
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _seed_ledger_offsets(ledger_path, transcript_path)
         transcript_path.write_bytes(baseline_record + first_blob + second_blob)
         _run_collect(
@@ -794,6 +831,9 @@ def test_collect_keeps_ordinary_requests_under_transport_target(tmp_path: Path) 
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _seed_ledger_offsets(ledger_path, transcript_path)
         transcript_path.write_bytes(baseline_record + b"".join(pending_records))
         _run_collect(
@@ -844,6 +884,9 @@ def test_collect_skips_unreadable_idle_source_and_uploads_the_rest(tmp_path: Pat
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _seed_ledger_offsets(ledger_path, transcript_path)
 
         # Two idle files appear after the baseline; the alphabetically first one
@@ -919,6 +962,9 @@ def test_collect_tolerates_unparsed_record_counts_and_advances_ledger(tmp_path: 
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _seed_ledger_offsets(ledger_path, transcript_path)
         transcript_path.write_bytes(first_record + second_record)
         _run_collect(
@@ -965,6 +1011,9 @@ def test_collect_waits_for_ledger_lock_before_uploading_current_transcript(tmp_p
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _seed_ledger_offsets(ledger_path, transcript_path)
         transcript_path.write_bytes(first_record + second_record)
         policy_request_count = len(server.policy_requests)
@@ -1027,6 +1076,9 @@ def test_zero_catch_up_deadline_still_uploads_current_transcript(tmp_path: Path)
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _run_collect(
             plugin_root,
             ["collect", "--host", "codex", "--lifecycle", "session_start", "--quiet"],
@@ -1080,6 +1132,9 @@ def test_deadline_truncation_keeps_acked_progress_and_resumes(tmp_path: Path) ->
         zero_deadline_env = dict(env, PROMPTLESS_HOST_RUNTIME_COLLECT_DEADLINE_SECONDS="0")
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         _seed_ledger_offsets(ledger_path, transcript_path, idle_path)
 
         pending_records = [
@@ -1205,6 +1260,9 @@ def test_zero_deadline_without_current_transcript_defers_idle_history(tmp_path: 
         }
 
         _run_runtime_json(plugin_root, ["enroll", "--host", "codex"], env)
+        ledger_path = _scoped_ledger_path_for_test(
+            ledger_path, home=Path(env["HOME"]), worker_base_url=server.base_url, host="codex"
+        )
         # With no explicit transcript, the zero budget defers discovery without
         # manufacturing an offset for history that has not been uploaded.
         _run_collect(

@@ -67,7 +67,7 @@ from .output import (
 )
 from .redaction import _redact_text
 from .status import _reset_host_state, _status_payload
-from .storage import _atomic_write_text, _try_lock_state_file, _unlock_state_file
+from .storage import _atomic_write_text, _ledger_path, _scoped_ledger_path, _try_lock_state_file, _unlock_state_file
 from .traces import (
     _hook_trace_context,
     _lifecycle_event,
@@ -756,6 +756,13 @@ def _run_host_enrollment(
     credential = _credential_with_policy_identity(credential, signed_policy)
     _store_internal_promptless_identity(context, credential)
     trace_upload_endpoint = _worker_url(worker_base_url, "/v0/traces/batches")
+    source_ledger_path = _scoped_ledger_path(
+        _ledger_path(),
+        worker_base_url=context.worker_base_url,
+        deployment_instance_id=context.deployment_instance_id,
+        host_instance_id=context.host_instance_id,
+        host=host,
+    )
     if _requires_newer_bootstrap(policy.required_bootstrap_version, RUNTIME_VERSION):
         result = _blocked_result(
             host,
@@ -766,6 +773,7 @@ def _run_host_enrollment(
                 "bootstrap_version": RUNTIME_VERSION,
             },
             trace_upload_endpoint=trace_upload_endpoint,
+            source_ledger_path=source_ledger_path,
         )
         _post_check_in(check_in_url, credential, host, metadata, policy, result)
         _emit(
@@ -781,7 +789,9 @@ def _run_host_enrollment(
         )
         return 0
 
-    result = _ensure_host_config(host, trace_upload_endpoint=trace_upload_endpoint)
+    result = _ensure_host_config(
+        host, trace_upload_endpoint=trace_upload_endpoint, source_ledger_path=source_ledger_path
+    )
     _post_check_in(check_in_url, credential, host, metadata, policy, result)
     first_success_notice = None
     if claim_notices:
