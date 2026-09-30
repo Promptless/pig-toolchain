@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ..contracts import HookTraceContext, JsonValue, LifecycleEvent
-from .database import ADAPTER_VERSION, mapping, read_session, string
+from .database import ADAPTER_VERSION, database_path, mapping, read_session, string
 from ..storage import _atomic_write_text, _ledger_path, _try_lock_state_file, _unlock_state_file
 
 MAX_RECORD = 2 * 1024 * 1024
@@ -44,6 +44,23 @@ def transcript_glob() -> str:
 
 def _digest(value: JsonValue) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _database_revision() -> str | None:
+    """Invalidate completed traversal work after SQLite writes or checkpoints."""
+    path = database_path().resolve()
+    revision: list[JsonValue] = [str(path)]
+    for source in (path, path.with_name(path.name + "-wal")):
+        try:
+            stat = source.stat()
+        except FileNotFoundError:
+            revision.append(None)
+        except OSError:
+            # An unreadable source cannot justify skipping previously seen children.
+            return None
+        else:
+            revision.append([stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns])
+    return _digest(revision)
 
 
 def _fallback(path: Path | None) -> list[dict[str, JsonValue]]:
@@ -215,7 +232,8 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
         subject = None
     state_path = spool_root() / "scan-state.json"
     state = mapping(json.loads(state_path.read_text())) if state_path.exists() else {}
-    offsets = mapping(state.get("offsets"))
+    traversals = mapping(state.get("traversals"))
+    database_revision = _database_revision()
     after = string(state.get("after")) or ""
     discovered: dict[str, Path] = {}
     discovery_deadline = time.monotonic() + 1
@@ -229,43 +247,67 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
             break
     ordered = sorted(discovered)
     ordered = [key for key in ordered if key > after] + [key for key in ordered if key <= after]
-    pending: list[tuple[str, Path | None]] = [(subject, subject_path)] if subject else []
-    pending.extend((key, discovered[key]) for key in ordered[:16])
-    seen: set[str] = set()
+    # The empty owner is opportunistic discovery, independent of notifications.
+    owners = [subject, ""] if subject else [""]
+    pending: list[tuple[str, Path | None, str]] = [(subject, subject_path, subject)] if subject else []
+    scheduled = {(subject, subject)} if subject else set()
+    completed: dict[str, set[str]] = {}
+    offsets: dict[str, dict[str, JsonValue]] = {}
+    retry_offsets: dict[str, dict[str, JsonValue]] = {}
+    for owner in owners:
+        traversal = mapping(traversals.get(owner))
+        offsets[owner] = mapping(traversal.get("offsets"))
+        retry_offsets[owner] = mapping(traversal.get("retry_offsets"))
+        saved_pending = traversal.get("pending")
+        resumed = [key for key in saved_pending if isinstance(key, str)] if isinstance(saved_pending, list) else []
+        saved_completed = (
+            traversal.get("completed")
+            if database_revision is not None and database_revision == traversal.get("database_revision")
+            else None
+        )
+        completed[owner] = (
+            {key for key in saved_completed if isinstance(key, str)} if isinstance(saved_completed, list) else set()
+        )
+        for key in [*resumed, *(ordered[:16] if not owner else [])]:
+            if (key, owner) not in scheduled:
+                pending.append((key, discovered.get(key), owner))
+                scheduled.add((key, owner))
+    seen: set[tuple[str, str]] = set()
+    retry: list[tuple[str, str]] = []
     deadline = time.monotonic() + 5
     current: Path | None = None
     errors: dict[str, int] = {}
-    complete = True
     while pending and time.monotonic() < deadline and len(seen) < 32:
-        session_id, transcript = pending.pop(0)
-        if session_id in seen or not SESSION_PATTERN.fullmatch(session_id):
+        session_id, transcript, owner = pending.pop(0)
+        if (session_id, owner) in seen or not SESSION_PATTERN.fullmatch(session_id):
             continue
-        seen.add(session_id)
+        seen.add((session_id, owner))
+        children: list[str] = []
         page_complete = False
         try:
-            offset = offsets.get(session_id, 0)
+            offset = offsets[owner].get(session_id, 0)
+            retry_offset = retry_offsets[owner].get(session_id)
             page = read_session(
                 session_id,
                 deadline=min(deadline, time.monotonic() + 0.5),
                 offset=offset if isinstance(offset, int) else 0,
+                retry_offset=retry_offset if isinstance(retry_offset, int) else None,
             )
             observations = page.records
-            pending.extend((child, None) for child in page.children if child not in seen)
+            children = page.children
             next_offset = page.next_offset
             page_complete = page.complete
-            complete = complete and page_complete
         except (sqlite3.Error, OSError, ValueError) as exc:
             reason = "database_busy" if isinstance(exc, sqlite3.OperationalError) else "decode_or_budget"
             errors[reason] = errors.get(reason, 0) + 1
             observations = []
             next_offset = None
-            complete = False
         if not observations:
             try:
                 observations = _fallback(transcript)
             except (OSError, ValueError):
                 errors["transcript_unreadable"] = errors.get("transcript_unreadable", 0) + 1
-        if session_id == subject and lifecycle and next_offset == 0 and page_complete:
+        if session_id == subject and owner == subject and lifecycle and next_offset == 0 and page_complete:
             observations.append(
                 {
                     "event_id": f"lifecycle:{context.generation_id or 'unknown'}:{lifecycle}",
@@ -279,15 +321,59 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
                 }
             )
         if observations:
-            path = append_observations(session_id, observations)
-            if session_id == subject:
-                current = path
+            try:
+                path = append_observations(session_id, observations)
+            except (OSError, ValueError):
+                errors["journal_write"] = errors.get("journal_write", 0) + 1
+                next_offset = None
+                page_complete = False
+            else:
+                if session_id == subject and owner == subject:
+                    current = path
         if next_offset is not None:
-            offsets[session_id] = next_offset
-        if session_id != subject:
+            offsets[owner][session_id] = next_offset
+            if page.retry_offset is None:
+                retry_offsets[owner].pop(session_id, None)
+            else:
+                retry_offsets[owner][session_id] = page.retry_offset
+        for child in children:
+            if (child, owner) not in scheduled and child not in completed[owner]:
+                pending.append((child, discovered.get(child), owner))
+                scheduled.add((child, owner))
+        if not owner:
             after = session_id
-        # Only advance after fsync. Replaying after a crash is idempotent.
-        _atomic_write_text(state_path, json.dumps({"offsets": offsets, "after": after}))
+        if page_complete:
+            completed[owner].add(session_id)
+        else:
+            completed[owner].discard(session_id)
+            retry.append((session_id, owner))
+    remaining = [(session_id, owner) for session_id, _, owner in pending] + retry
+    # The notification queue retries each subject independently. An unreadable
+    # old subject must not hold up acknowledgment of another notification.
+    for owner in owners:
+        owned_remaining = [session_id for session_id, task_owner in remaining if task_owner == owner]
+        if owned_remaining:
+            traversals[owner] = {
+                "pending": owned_remaining,
+                "offsets": offsets[owner],
+                "retry_offsets": retry_offsets[owner],
+                "completed": sorted(completed[owner])
+                if any(task_owner == owner for _, _, task_owner in pending)
+                else [],
+                "database_revision": database_revision,
+            }
+        else:
+            traversals.pop(owner, None)
+    # Save traversal progress only after journal fsyncs. Crash replay is idempotent.
+    _atomic_write_text(
+        state_path,
+        json.dumps(
+            {
+                "after": after,
+                "traversals": traversals,
+            }
+        ),
+    )
     _atomic_write_text(
         spool_root() / "diagnostics.json",
         json.dumps(
@@ -295,7 +381,7 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
                 "adapter": ADAPTER_VERSION,
                 "sessions_observed": len(seen),
                 "errors": errors,
-                "pending_sessions": len(pending),
+                "pending_sessions": len(remaining),
                 "discovery_truncated": discovery_truncated,
                 "observed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             }
@@ -303,5 +389,5 @@ def _prepare_journals(context: HookTraceContext, lifecycle: LifecycleEvent) -> C
     )
     return CursorExport(
         replace(context, transcript_path=current, agent_transcript_path=None, session_id=subject),
-        complete and not pending,
+        not any(owner == (subject or "") for _, owner in remaining),
     )

@@ -79,9 +79,40 @@ pointers on the source branch for the configured Claude, Codex, and Cursor targe
 The caller above runs publication on pushes to `main` or manual runs on `main`,
 and its concurrency group prevents overlapping publish runs.
 
-Publishing uses the caller repository's automatic `GITHUB_TOKEN`; no additional
-secret is required. Grant `contents: write` as shown and ensure repository rules
-allow that token to push to both the source and release branches.
+Publishing defaults to the caller repository's automatic `GITHUB_TOKEN`. Grant
+`contents: write` as shown and ensure repository rules allow that identity to
+update both the source and release branches.
+
+If your branch rules require a dedicated publisher, pass its token through the
+reusable workflow's optional `publisher-token` secret:
+
+```yaml
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    uses: Promptless/pig-toolchain/.github/workflows/publish.yml@main
+    secrets:
+      publisher-token: ${{ secrets.INSTRUCTION_HUB_PUBLISHER_TOKEN }}
+```
+
+For example, use a fine-grained personal access token restricted to this
+repository with Contents read/write permission. A currently valid GitHub App
+installation token also works; mint short-lived App tokens at run time rather
+than storing them as permanent repository secrets. When minting one in the same
+job as the composite action, pass it through the action's `github-token` input.
+The selected token authenticates publication fetches and the atomic push; the
+initial caller checkout continues to use the automatic token.
+
+The publisher identity must be authorized by the rules for **both** branches.
+`contents: write` alone does not bypass required pull requests or other branch
+rules. This publication mode writes source version, lock, and marketplace
+pointer updates directly; repositories requiring every such update through a
+pull request need an explicitly authorized publishing identity before using it.
+If either branch update is rejected, the atomic push leaves both unchanged.
+After a connection failure, check the remote refs before retrying, since the
+server may already have accepted both updates. Unlike automatic-token pushes,
+custom-token pushes can trigger another workflow run; unchanged publication is
+a no-op.
 
 All workflow inputs are optional. Set them under the calling job's `with`:
 
@@ -288,6 +319,9 @@ come from `name` where the target supports them. Authored plugin output goes to
 `dist/{target}/{plugin.id}/`. Gemini receives extensions with the same plugin
 IDs; it has no generated marketplace manifest.
 
+`pig init` requires `--org` with your organization's name; there is no default
+organization. Empty or whitespace-only names are rejected before any files are
+created, and surrounding whitespace is trimmed.
 `pig init --org Acme` defaults to marketplace ID `acme-instruction-hub` and
 display name `Acme Instruction Hub`. Override those with `--marketplace-id` and
 `--marketplace-name`. `version` is the hub release version shared by all compiled
@@ -307,6 +341,24 @@ branches. Publish requires committed source files and a clean index.
 An unchanged rerun creates no commits. If only one branch needs a content change,
 the other receives an empty recording commit so Git checks both leases. Merely
 writing the resolved version back does not cause another version bump.
+
+### MCP transports
+
+MCP assets use `command` for local stdio servers and `url` with `type: http` or
+`type: sse` for remote servers. A URL without a type defaults to HTTP; specify
+`sse` explicitly for an SSE endpoint. Gemini's `httpUrl` input is also accepted
+as HTTP. Declare exactly one connection field, and keep `type` and `transport`
+consistent if both are present.
+
+The compiler emits the connection fields each host expects: Claude and Codex
+receive explicit remote types, Cursor receives `url`, and Gemini receives
+`httpUrl` for HTTP or `url` for SSE. Other server settings are preserved; their
+host-specific semantics, including environment interpolation, are not converted.
+Codex does not support SSE. Restrict an SSE asset's target support or provide a
+Codex-only HTTP definition with the same server name. Target-specific definitions
+override shared definitions before transport validation. WebSocket transport
+(`type: ws`) is supported only for Claude. Claude also permits an empty remote
+URL as an unconfigured optional connector; other targets require a nonempty URL.
 
 ### External plugins
 
@@ -362,15 +414,16 @@ bump collides, choose a higher version with
 
 This is a breaking source configuration and installed plugin identity change.
 Coordinate the toolchain upgrade with the hub migration. Validation rejects
-legacy fields and the old `packages/` directory with migration guidance.
+legacy fields and recognized plugin definitions in `packages/*.yaml` with
+migration guidance. Unrelated application packages may remain in `packages/`.
 
 1. Replace root `plugin_id` and `plugin_name` with `marketplace.id` and
    `marketplace.name`. To keep an existing marketplace registration, set the new
    ID to its previous generated name: the old `plugin_id` plus `-marketplace`.
    The compiler now uses that value verbatim.
-2. Move `packages/` to `plugins/` and rename `stable_packages` to
-   `stable_plugins` in `hub.yaml`. Keep each definition's `id`, `name`, and
-   `includes`. Update custom CI path filters and scripts that reference the old
+2. Move the legacy plugin definitions from `packages/*.yaml` to `plugins/` and
+   rename `stable_packages` to `stable_plugins` in `hub.yaml`. Keep each
+   definition's `id`, `name`, and `includes`. Update custom CI path filters and scripts that reference the old
    directory or `pig init --plugin-id` / `--plugin-name` flags.
 3. Rename `plugin_version` to `version` in `hub.yaml` and use `--version`
    instead of `--plugin-version` in scripts. Version 2 release manifests use
@@ -438,6 +491,15 @@ release metadata is also flat at the hub root:
 Scan-generated metadata is committed as a root file:
 
 - `hub.repo-context.json`: scanned repository-context inventory.
+
+Run `pig scan --hub ./instruction-hub --source ./existing-repo` to import skills
+from `.agents/skills`, `.claude/skills`, and `.cursor/skills` into `assets/skills`
+and add them to the `pig` plugin. The scanner copies each skill's supporting
+files and normalizes its entry point to `SKILL.md`. Skill directory names become
+lowercase, hyphenated asset IDs. If two directories map to the same ID, scanning
+fails before copying any skills and reports both paths, even when their contents
+are identical. Rename or consolidate the source directories before retrying.
+Symlinks in imported skill trees are rejected.
 
 Native Cursor rules can be authored as `assets/rules/<id>.mdc` with a matching
 `<id>.asset.yaml` sidecar declaring `support.cursor.mode: native`. The compiler

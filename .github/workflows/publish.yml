@@ -6,6 +6,9 @@ on:
       toolchain-token:
         description: Optional token with read access to a private toolchain repository. Defaults to github.token.
         required: false
+      publisher-token:
+        description: Optional token for source/release fetches and atomic publication; defaults to the caller's GITHUB_TOKEN.
+        required: false
     inputs:
       hub-root:
         description: Path to the Instruction Hub root.
@@ -94,4 +97,4 @@ jobs:
           hub-root: ${{ inputs.hub-root }}
           release-branch: ${{ inputs.release-branch }}
           source-branch: ${{ inputs.source-branch }}
-          github-token: ${{ github.token }}
+          github-token: ${{ secrets.publisher-token || github.token }}

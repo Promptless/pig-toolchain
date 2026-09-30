@@ -193,7 +193,7 @@ def test_previous_release_comparison_respects_host_version_behavior(
 ) -> None:
     upstream, hub, previous = tmp_path / "upstream", tmp_path / "hub", tmp_path / "previous"
     sha = make_upstream(upstream, monkeypatch)
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     definition = external_definition(sha)
     if change.endswith("-only"):
         definition["targets"] = {change.removesuffix("-only"): {"path": PLUGIN_PATH}}
@@ -225,7 +225,7 @@ def test_authored_to_external_migration_cannot_reuse_claude_version(
 ) -> None:
     upstream, hub, previous = tmp_path / "upstream", tmp_path / "hub", tmp_path / "previous"
     sha = make_upstream(upstream, monkeypatch)
-    init_hub(hub, version="1.2.3")
+    init_hub(hub, version="1.2.3", org="Promptless")
     write_external(hub, {"id": "doc-detective", "name": "Vendored Doc Detective", "includes": []})
     build_hub(hub)
     shutil.copytree(hub, previous)
@@ -363,7 +363,7 @@ def test_safe_external_to_authored_migrations(tmp_path: Path, monkeypatch: pytes
             del manifest["version"]
             manifest_path.write_text(json.dumps(manifest))
         sha = commit_upstream(upstream)
-    init_hub(hub, version="1.2.3" if change == "auto-bump" else "1.2.2")
+    init_hub(hub, version="1.2.3" if change == "auto-bump" else "1.2.2", org="Promptless")
     definition = external_definition(sha)
     if change == "codex-only":
         del definition["targets"]["claude"]

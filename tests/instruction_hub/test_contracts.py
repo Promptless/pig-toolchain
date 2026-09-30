@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 from jsonschema import Draft202012Validator
 
 from promptless_instruction_hub.cli import main
@@ -31,6 +32,22 @@ def test_reusable_workflows_run_caller_pinned_toolchain_ref(workflow_name: str) 
     assert "uses: ./.promptless-pig-toolchain" in workflow_text
 
 
+def test_publisher_identity_is_optional_and_used_only_by_publication() -> None:
+    workflow = yaml.load((WORKFLOWS / "publish.yml").read_text(), Loader=yaml.BaseLoader)
+    secret = workflow["on"]["workflow_call"]["secrets"]["publisher-token"]
+    assert secret["required"] == "false"
+    job = workflow["jobs"]["instruction-hub"]
+    assert job["permissions"]["contents"] == "write"
+    action = job["steps"][-1]
+    assert action["uses"] == "./.promptless-pig-toolchain"
+    assert action["with"]["mode"] == "publish"
+    assert action["with"]["github-token"] == "${{ secrets.publisher-token || github.token }}"
+    for step in job["steps"][:-1]:
+        assert "secrets.publisher-token" not in json.dumps(step)
+        if step.get("uses", "").startswith("actions/checkout@"):
+            assert step["with"]["persist-credentials"] == "false"
+
+
 def test_cli_init_scan_verify_build_validate_and_status(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     hub_root = tmp_path / "hub"
 
@@ -52,7 +69,7 @@ def test_empty_hub_fixture_bootstraps(tmp_path: Path) -> None:
     hub_root = tmp_path / "empty-hub"
     shutil.copytree(FIXTURES / "empty-hub", hub_root)
 
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     result = build_hub(hub_root)
 
     assert result.asset_count == 0
@@ -148,7 +165,7 @@ def test_optional_hub_tests_keep_command_and_platform_in_caller_configuration() 
 
 @pytest.mark.parametrize("plugin_path", [None, ".", "plugins/doc-detective", "plugins/Doc Detective"])
 def test_generated_release_validates_against_shipped_schema(tmp_path: Path, plugin_path: str | None) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     if plugin_path is not None:
         write_external(tmp_path, external_definition(path=plugin_path))
     build_hub(tmp_path)

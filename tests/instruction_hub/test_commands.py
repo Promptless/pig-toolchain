@@ -30,7 +30,7 @@ def _write_command(
     support: dict[str, object] | None = None,
     body: str = BODY,
 ) -> Path:
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     source = hub / "assets/commands" / f"{name}.md"
     frontmatter = metadata if metadata is not None else {"description": "Rebase the current PR."}
     source.write_text("---\n" + yaml.safe_dump(frontmatter) + "---\n" + body, encoding="utf-8")
@@ -343,7 +343,7 @@ def test_only_enabled_hub_targets_validate_command_semantics(tmp_path: Path) -> 
 
 
 def test_verbatim_is_not_a_general_asset_passthrough_mode(tmp_path: Path) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     source = tmp_path / "assets/agents/research.md"
     source.write_text("Research.")
     source.with_suffix(".asset.yaml").write_text("support:\n  claude:\n    mode: verbatim\n")
