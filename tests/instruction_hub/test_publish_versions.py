@@ -325,7 +325,7 @@ def test_publish_migrates_immutable_runtime_metadata(tmp_path: Path, schema_vers
 
 @pytest.mark.parametrize("schema_version", [2, 3, 4])
 def test_release_reader_rejects_runtime_metadata_for_another_schema(tmp_path: Path, schema_version: int) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     enable_trace_ingestion(tmp_path)
     build_hub(tmp_path)
     manifest_path = tmp_path / "hub.release.json"
