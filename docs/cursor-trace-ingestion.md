@@ -15,7 +15,7 @@ collector. There are no per-tool hooks.
 4. Add `cursor` to the installation's enabled hosts. Ensure Node and Python
    3.9+ are available on Cursor's PATH, then complete host enrollment.
 
-The generated plugin includes managed runtime 0.3.0. An unenrolled collector can
+The generated plugin includes managed runtime 0.4.0. An unenrolled collector can
 open the enrollment page in the background. Worker or enrollment failure leaves
 Cursor usable and pending collection available for a subsequent lifecycle hook.
 

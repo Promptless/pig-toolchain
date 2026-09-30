@@ -261,7 +261,7 @@ def _read_any_bootstrap_status(process: subprocess.Popen[str]) -> dict[str, Json
     return _parse_session_start_streams(stdout, stderr)
 
 
-def _clone_plugin_with_identity(source_plugin: Path, destination: Path, *, plugin_id: str, package_id: str) -> Path:
+def _clone_plugin_with_identity(source_plugin: Path, destination: Path, *, plugin_id: str) -> Path:
     """Copy a built plugin and rewrite its managed-runtime identity to simulate a second hub plugin."""
     shutil.copytree(source_plugin, destination)
     manifest_path = destination / "hub.managed-runtimes.json"
@@ -269,7 +269,6 @@ def _clone_plugin_with_identity(source_plugin: Path, destination: Path, *, plugi
     runtimes = _json_list(manifest["managed_runtimes"], "managed_runtimes")
     runtime = _json_mapping(runtimes[0], "managed_runtimes[0]")
     runtime["plugin_id"] = plugin_id
-    runtime["package_id"] = package_id
     manifest_path.write_text(json.dumps(manifest))
     return destination
 
@@ -399,7 +398,7 @@ def _write_native_hook_asset(
     hub_root: Path,
     hooks: dict[str, JsonValue],
     *,
-    package_id: str = "pig",
+    plugin_id: str = "pig",
 ) -> None:
     hooks_path = hub_root / "assets/hooks/hooks.json"
     hooks_path.write_text(json.dumps(hooks))
@@ -423,21 +422,21 @@ def _write_native_hook_asset(
             ]
         )
     )
-    package_name = "PIG" if package_id == "pig" else package_id.replace("-", " ").title()
-    (hub_root / f"plugins/{package_id}.yaml").write_text(
-        f"id: {package_id}\nname: {package_name}\nincludes:\n  - hook:hooks\n"
+    plugin_name = "PIG" if plugin_id == "pig" else plugin_id.replace("-", " ").title()
+    (hub_root / f"plugins/{plugin_id}.yaml").write_text(
+        f"id: {plugin_id}\nname: {plugin_name}\nincludes:\n  - hook:hooks\n"
     )
-    if package_id != "pig":
+    if plugin_id != "pig":
         config_path = hub_root / "hub.yaml"
         config_path.write_text(
-            config_path.read_text().replace("stable_plugins:\n- pig\n", f"stable_plugins:\n- pig\n- {package_id}\n")
+            config_path.read_text().replace("stable_plugins:\n- pig\n", f"stable_plugins:\n- pig\n- {plugin_id}\n")
         )
 
 
 def _policy_with(**policy_updates: JsonValue) -> dict[str, JsonValue]:
     payload = _json_mapping(
-        validate_json_value(json.loads(json.dumps(_signed_policy())), "signed policy fixture"),
-        "signed policy fixture",
+        validate_json_value(json.loads(json.dumps(_policy_response())), "policy response fixture"),
+        "policy response fixture",
     )
     policy = _json_mapping(payload["policy"], "policy")
     policy.update(policy_updates)
@@ -449,7 +448,9 @@ def _invalid_policy(case: str) -> dict[str, JsonValue]:
     payload = _policy_with()
     policy = _json_mapping(payload["policy"], "policy")
 
-    if case == "expired":
+    if case == "schema_version":
+        policy["schema_version"] = 1
+    elif case == "expired":
         policy["expires_at"] = (now - dt.timedelta(minutes=1)).isoformat()
     else:
         raise AssertionError(f"unhandled invalid policy case: {case}")
@@ -504,7 +505,7 @@ class _FakeWorkerServer:
         _FakeWorkerHandler.poll_requests = self.poll_requests
         _FakeWorkerHandler.session_requests = self.session_requests
         _FakeWorkerHandler.trace_batches = self.trace_batches
-        _FakeWorkerHandler.policy_response = policy or _signed_policy()
+        _FakeWorkerHandler.policy_response = policy or _policy_response()
         _FakeWorkerHandler.poll_response = poll_response
         _FakeWorkerHandler.post_response = post_response
         _FakeWorkerHandler.session_response = session_response
@@ -769,27 +770,17 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
             condition.wait_for(lambda: len(self.session_requests) >= self.session_barrier_count, timeout=10)
 
 
-def _signed_policy(*, enabled_hosts: list[str] | None = None) -> dict[str, JsonValue]:
+def _policy_response(*, enabled_hosts: list[str] | None = None) -> dict[str, JsonValue]:
     now = dt.datetime.now(dt.timezone.utc)
     return {
         "policy": {
-            "schema_version": 1,
+            "schema_version": 2,
             "org_id": "org_test",
             "deployment_id": "worker-local-1",
             "policy_version": 1,
             "issued_at": now.isoformat(),
             "expires_at": (now + dt.timedelta(days=7)).isoformat(),
-            "collector": {
-                "otlp_http_logs_endpoint": "http://127.0.0.1:4318/v1/logs",
-                "otlp_http_traces_endpoint": "http://127.0.0.1:4318/v1/traces",
-                "otlp_http_metrics_endpoint": "http://127.0.0.1:4318/v1/metrics",
-                "otlp_grpc_endpoint": "http://127.0.0.1:4317",
-                "headers": {"Authorization": "Bearer otlp-token"},
-                "tls": None,
-            },
             "enabled_hosts": enabled_hosts or ["codex", "claude"],
             "required_bootstrap_version": "0.2.0",
         },
-        "signature": "hmac-sha256-v1:test",
-        "signed_at": now.isoformat(),
     }

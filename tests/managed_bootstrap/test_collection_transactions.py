@@ -42,7 +42,6 @@ def _metadata(plugin_version: str = "1.0.0") -> RuntimeMetadata:
         plugin_id="promptless-instruction-hub-pig",
         plugin_name="PIG",
         plugin_version=plugin_version,
-        package_id="pig",
         target="codex",
     )
 
