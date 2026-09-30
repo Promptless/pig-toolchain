@@ -16,7 +16,7 @@ from tests.config_helpers import enable_trace_ingestion
 
 
 def declaration(root: Path) -> Path:
-    init_hub(root)
+    init_hub(root, org="Promptless")
     bundle = root / "assets/hooks/example"
     bundle.mkdir(parents=True)
     metadata = {

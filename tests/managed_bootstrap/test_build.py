@@ -930,7 +930,7 @@ def test_build_injects_managed_bootstrap_runtime(tmp_path: Path) -> None:
 
 def test_host_runtime_bundle_digest_tracks_runtime_files_only(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    init_hub(hub_root)
+    init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/codex/pig"
