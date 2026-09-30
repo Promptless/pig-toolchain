@@ -23,18 +23,18 @@ def _set_ingestion(hub: Path, value: JsonValue) -> None:
 
 
 def test_init_disables_ingestion_without_overwriting_existing_choice(tmp_path: Path) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     assert read_yaml_mapping(tmp_path / "hub.yaml")["trace_ingestion"] == {"enabled": False}
     enable_trace_ingestion(tmp_path)
     before = (tmp_path / "hub.yaml").read_bytes()
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     assert (tmp_path / "hub.yaml").read_bytes() == before
     assert load_hub_config(tmp_path).trace_ingestion.enabled
 
 
 @pytest.mark.parametrize("omit_section", [True, False])
 def test_omitted_setting_disables_ingestion(tmp_path: Path, omit_section: bool) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     config = read_yaml_mapping(tmp_path / "hub.yaml")
     if omit_section:
         del config["trace_ingestion"]
@@ -51,7 +51,7 @@ def test_omitted_setting_disables_ingestion(tmp_path: Path, omit_section: bool) 
     "setting", [None, False, "false", {"enabled": "false"}, {"enabled": 0}, {"enabled": None}, {"enable": False}]
 )
 def test_invalid_ingestion_setting_fails_validation(tmp_path: Path, setting: JsonValue) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     _set_ingestion(tmp_path, setting)
     with pytest.raises(InstructionHubError, match="trace_ingestion"):
         verify_hub(tmp_path)
@@ -60,7 +60,7 @@ def test_invalid_ingestion_setting_fails_validation(tmp_path: Path, setting: Jso
 def test_disabled_build_preserves_instructions_and_mcp_without_runtime(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     scan_hub(tmp_path, FIXTURES / "dogfood-source")
 
     def unexpected_runtime_copy(*args: object, **kwargs: object) -> None:
@@ -94,7 +94,7 @@ def test_disabled_build_preserves_instructions_and_mcp_without_runtime(
 def test_disabling_ingestion_removes_stale_runtime_and_preserves_authored_hooks(
     tmp_path: Path, authored_hooks: bool
 ) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     enable_trace_ingestion(tmp_path)
     hooks: dict[str, JsonValue] = {
         "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "echo authored"}]}]}

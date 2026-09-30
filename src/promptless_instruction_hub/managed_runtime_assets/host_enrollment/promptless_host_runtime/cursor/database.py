@@ -31,6 +31,7 @@ class SessionPage:
     children: list[str]
     next_offset: int
     complete: bool = True
+    retry_offset: int | None = None
 
 
 def database_path() -> Path:
@@ -147,7 +148,7 @@ def _canonical_tools(
                 return
 
 
-def read_session(session_id: str, *, deadline: float, offset: int = 0) -> SessionPage:
+def read_session(session_id: str, *, deadline: float, offset: int = 0, retry_offset: int | None = None) -> SessionPage:
     """Snapshot saved events and child IDs without writing or waiting on Cursor."""
     uri = database_path().resolve().as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True, timeout=0)) as connection:
@@ -174,7 +175,8 @@ def read_session(session_id: str, *, deadline: float, offset: int = 0) -> Sessio
         records: list[dict[str, JsonValue]] = []
         bubbles: list[tuple[int, str, dict[str, JsonValue]]] = []
         results: dict[str, tuple[JsonValue, str]] = {}
-        retry_offsets: list[int] = []
+        retry_offsets = [retry_offset] if retry_offset is not None and 0 <= retry_offset < len(headers) else []
+        retry_offset = None
         next_offset = 0
         complete = True
         if isinstance(headers, list):
@@ -222,7 +224,7 @@ def read_session(session_id: str, *, deadline: float, offset: int = 0) -> Sessio
                             "capture": {"source": "database", "completeness": "missing"},
                         }
                     )
-                    complete = False
+                    retry_offsets.append(next_offset)
                 bubbles.append((next_offset, bubble_id, bubble))
                 next_offset += 1
             if next_offset >= len(headers):
@@ -263,7 +265,12 @@ def read_session(session_id: str, *, deadline: float, offset: int = 0) -> Sessio
                         retry_offsets.append(index)
             records.extend(_bubble_events(bubble_id, bubble, result, metadata))
         if retry_offsets:
-            next_offset = min(next_offset or len(headers), *retry_offsets)
+            # Finish forward pagination before revisiting gaps. Carry only the
+            # earliest retry across pages, then rescan from it after this sweep.
+            if next_offset == 0:
+                next_offset = min(retry_offsets)
+            else:
+                retry_offset = min(retry_offsets)
             complete = False
         children = composer.get("subagentComposerIds")
         return SessionPage(
@@ -271,6 +278,7 @@ def read_session(session_id: str, *, deadline: float, offset: int = 0) -> Sessio
             [child for child in children if isinstance(child, str)][:64] if isinstance(children, list) else [],
             next_offset,
             complete and next_offset == 0,
+            retry_offset,
         )
 
 

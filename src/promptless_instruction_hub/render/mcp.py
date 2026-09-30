@@ -6,7 +6,7 @@ from pathlib import Path
 
 from promptless_instruction_hub.errors import InstructionHubError
 from promptless_instruction_hub.fs import JsonValue, write_json
-from promptless_instruction_hub.mcp_config import read_mcp_servers
+from promptless_instruction_hub.mcp_config import read_mcp_servers, render_mcp_server
 from promptless_instruction_hub.models import Harness, LoadedAsset
 
 
@@ -35,7 +35,10 @@ def collect_mcp_servers(target: Harness, assets: list[LoadedAsset]) -> dict[str,
                     continue
             servers[server_name] = server_config
             server_origins[server_name] = (priority, asset.ref)
-    return servers
+    return {
+        server_name: render_mcp_server(target, server_config, source=f"{server_origins[server_name][1]}.{server_name}")
+        for server_name, server_config in servers.items()
+    }
 
 
 def write_mcp_config(target_root: Path, target: Harness, mcp_servers: dict[str, JsonValue]) -> None:

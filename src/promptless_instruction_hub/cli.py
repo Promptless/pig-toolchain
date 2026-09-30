@@ -36,7 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     init_parser = subcommands.add_parser("init", help="initialize an empty Instruction Hub")
     _add_hub_arg(init_parser)
-    init_parser.add_argument("--org", default="Promptless")
+    init_parser.add_argument("--org", required=True, help="organization that owns this Instruction Hub")
     init_parser.add_argument("--marketplace-id")
     init_parser.add_argument("--marketplace-name")
     init_parser.add_argument("--version", default="0.1.0")

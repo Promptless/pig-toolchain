@@ -10,7 +10,7 @@ from promptless_instruction_hub.errors import InstructionHubError
 
 @pytest.mark.parametrize("old_scalar", ["0.1.0", '"0.1.0"', "'0.1.0'"])
 def test_writeback_preserves_other_source_and_comments(tmp_path: Path, old_scalar: str) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     config_path = tmp_path / "hub.yaml"
     source = "# Hub configuration\n" + config_path.read_text().replace(
         "version: 0.1.0", f"version: {old_scalar} # released"
@@ -26,7 +26,7 @@ def test_writeback_preserves_other_source_and_comments(tmp_path: Path, old_scala
 
 
 def test_writeback_rejects_invalid_version_without_changing_source(tmp_path: Path) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     before = (tmp_path / "hub.yaml").read_bytes()
     with pytest.raises(ValidationError, match="version must be SemVer"):
         write_hub_version(tmp_path, "invalid")
@@ -35,7 +35,7 @@ def test_writeback_rejects_invalid_version_without_changing_source(tmp_path: Pat
 
 @pytest.mark.parametrize("style", ["|-", ">-"])
 def test_writeback_preserves_block_scalar_and_following_key(tmp_path: Path, style: str) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     config_path = tmp_path / "hub.yaml"
     source = config_path.read_text().replace("version: 0.1.0\n", f"version: {style} # released\n  0.1.0\n")
     config_path.write_text(source)
@@ -47,7 +47,7 @@ def test_writeback_preserves_block_scalar_and_following_key(tmp_path: Path, styl
 
 
 def test_config_rejects_old_version_key(tmp_path: Path) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     config_path = tmp_path / "hub.yaml"
     config_path.write_text(config_path.read_text().replace("version:", "plugin_version:"))
     with pytest.raises(InstructionHubError, match="plugin_version"):
@@ -55,7 +55,7 @@ def test_config_rejects_old_version_key(tmp_path: Path) -> None:
 
 
 def test_writeback_rejects_shared_yaml_alias_without_changing_source(tmp_path: Path) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     config_path = tmp_path / "hub.yaml"
     source = (
         config_path.read_text()

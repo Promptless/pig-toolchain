@@ -47,7 +47,7 @@ from .helpers import _git, _git_output, _snapshot_tree, _write_release_manifest_
     ],
 )
 def test_invalid_external_definitions_fail_offline(tmp_path: Path, field: str, value: Any) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     definition = external_definition()
     definition[field] = value
     write_external(tmp_path, definition)
@@ -73,7 +73,7 @@ def test_invalid_external_definitions_fail_offline(tmp_path: Path, field: str, v
     ],
 )
 def test_external_plugin_paths_cannot_escape_repo(tmp_path: Path, path: str) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     write_external(tmp_path, external_definition(path=path))
     with pytest.raises(InstructionHubError, match="relative POSIX"):
         validate_hub(tmp_path)
@@ -91,7 +91,7 @@ def test_external_plugin_paths_cannot_escape_repo(tmp_path: Path, path: str) -> 
     ],
 )
 def test_external_plugin_urls_are_portable_and_credential_free(tmp_path: Path, url: str) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     definition = external_definition()
     definition["source"]["url"] = url
     write_external(tmp_path, definition)
@@ -103,7 +103,7 @@ def test_external_plugin_urls_are_portable_and_credential_free(tmp_path: Path, u
 def test_mixed_marketplaces_build_offline_without_external_payloads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cursor_path: str
 ) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     definition = external_definition()
     definition["targets"]["codex"]["path"] = "."
     definition["targets"]["cursor"]["path"] = cursor_path
@@ -148,7 +148,7 @@ def test_mixed_marketplaces_build_offline_without_external_payloads(
 
 
 def test_only_declared_enabled_targets_are_emitted(tmp_path: Path) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     definition = external_definition()
     definition["targets"] = {"claude": {"path": PLUGIN_PATH}}
     write_external(tmp_path, definition)
@@ -166,7 +166,7 @@ def test_only_declared_enabled_targets_are_emitted(tmp_path: Path) -> None:
 
 def test_external_pins_participate_in_versioning_across_schema_migration(tmp_path: Path) -> None:
     hub, previous = tmp_path / "hub", tmp_path / "previous"
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     build_hub(hub)
     shutil.copytree(hub, previous)
     assert read_release_manifest(previous / "hub.release.json")[0] == "0.1.0"
@@ -195,7 +195,7 @@ def test_external_pins_participate_in_versioning_across_schema_migration(tmp_pat
 
 @pytest.mark.parametrize("mutation", ["legacy-schema", "bad-pin", "extra-field", "asset-injection"])
 def test_release_reader_rejects_invalid_external_provenance(tmp_path: Path, mutation: str) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     write_external(tmp_path, external_definition())
     build_hub(tmp_path)
     manifest_path = tmp_path / "hub.release.json"
@@ -220,7 +220,7 @@ def test_verifier_reads_pinned_upstream_manifests(
 ) -> None:
     upstream, hub = tmp_path / "upstream", tmp_path / "hub"
     sha = make_upstream(upstream, monkeypatch, path=path)
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     write_external(hub, external_definition(sha, path=path))
     # A changed working tree is deliberately ignored: the pin is authoritative.
     (upstream / path / ".claude-plugin/plugin.json").write_text("invalid JSON")
@@ -258,7 +258,7 @@ def test_verifier_accepts_spaces_in_component_directories_and_files(
             manifest["rules"] = "./review rules/"
         manifest_path.write_text(json.dumps(manifest))
     sha = commit_upstream(upstream)
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     write_external(hub, external_definition(sha, path=plugin_path))
     records = verify_external_plugins(hub)
     assert {(record["target"], record["path"]) for record in records} == {
@@ -271,7 +271,7 @@ def test_verifier_rejects_previous_hub_paths_outside_release(tmp_path: Path, pat
     if os.name == "nt" and "symlink" in path_kind:
         pytest.skip("Windows symlink creation requires privileges")
     hub, previous = tmp_path / "hub", tmp_path / "previous"
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     write_external(hub, external_definition())
     build_hub(hub)
     previous.mkdir()
@@ -339,7 +339,7 @@ def test_upstream_verification_failures(
         manifest_path.write_text(json.dumps(manifest))
     if failure not in {"missing-commit", "submodule"}:
         sha = commit_upstream(upstream)
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     write_external(hub, external_definition(sha))
     with pytest.raises(InstructionHubError):
         verify_external_plugins(hub)
@@ -361,7 +361,7 @@ def test_configuration_paths_must_reference_files(
     manifest[field] = path
     manifest_path.write_text(json.dumps(manifest))
     sha = commit_upstream(upstream)
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     write_external(hub, external_definition(sha))
 
     with pytest.raises(InstructionHubError, match=rf"\({target}\): {field} path must reference an upstream file"):
@@ -380,7 +380,7 @@ def test_configuration_paths_accept_files_and_inline_objects(
     manifest["lspServers"] = {}
     manifest_path.write_text(json.dumps(manifest))
     sha = commit_upstream(upstream)
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     write_external(hub, external_definition(sha))
 
     assert len(verify_external_plugins(hub)) == 3
@@ -392,7 +392,7 @@ def test_cursor_only_hub_verifies_only_enabled_target(tmp_path: Path, monkeypatc
     (upstream / PLUGIN_PATH / ".claude-plugin/plugin.json").unlink()
     (upstream / PLUGIN_PATH / ".codex-plugin/plugin.json").unlink()
     sha = commit_upstream(upstream)
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     config = yaml.safe_load((hub / "hub.yaml").read_text())
     config["targets"] = ["cursor"]
     (hub / "hub.yaml").write_text(yaml.safe_dump(config))
@@ -413,7 +413,7 @@ def test_cursor_rules_must_exist_inside_plugin(tmp_path: Path, monkeypatch: pyte
     manifest["rules"] = rules
     manifest_path.write_text(json.dumps(manifest))
     sha = commit_upstream(upstream)
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     write_external(hub, external_definition(sha))
     with pytest.raises(InstructionHubError, match=r"\(cursor\): .*rules"):
         verify_external_plugins(hub)
@@ -422,7 +422,7 @@ def test_cursor_rules_must_exist_inside_plugin(tmp_path: Path, monkeypatch: pyte
 def test_git_failure_does_not_print_credential_helper_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     write_external(tmp_path, external_definition())
     monkeypatch.setattr(
         subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, "", "secret-token")
@@ -432,7 +432,7 @@ def test_git_failure_does_not_print_credential_helper_output(
 
 
 def test_authored_only_verification_never_fetches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("unexpected fetch"))
     assert verify_external_plugins(tmp_path) == []
 
@@ -440,7 +440,7 @@ def test_authored_only_verification_never_fetches(tmp_path: Path, monkeypatch: p
 def test_git_timeout_fails_cli_cleanly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    init_hub(tmp_path)
+    init_hub(tmp_path, org="Promptless")
     write_external(tmp_path, external_definition())
 
     def timeout(*args: Any, **kwargs: Any) -> None:
@@ -459,6 +459,6 @@ def test_manifest_can_reference_plugin_root(tmp_path: Path, monkeypatch: pytest.
     manifest["skills"] = "./"
     manifest_path.write_text(json.dumps(manifest))
     sha = commit_upstream(upstream)
-    init_hub(hub)
+    init_hub(hub, org="Promptless")
     write_external(hub, external_definition(sha))
     assert verify_external_plugins(hub)
