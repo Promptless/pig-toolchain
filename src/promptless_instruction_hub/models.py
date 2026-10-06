@@ -11,6 +11,10 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.runtime_config import (
+    normalize_https_origin,
+)
+
 Harness = Literal["claude", "codex", "gemini", "cursor"]
 ExternalPluginHarness = Literal["claude", "codex", "cursor"]
 AssetKind = Literal["skill", "rule", "agent", "command", "hook", "mcp"]
@@ -90,11 +94,20 @@ class MarketplaceDefinition(BaseModel):
 
 
 class TraceIngestionConfig(BaseModel):
-    """Control whether plugins include the managed trace-ingestion runtime."""
+    """Control managed trace ingestion and optional deployment endpoints."""
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(default=False, strict=True)
+    worker_base_url: str | None = None
+    dashboard_base_url: str | None = None
+
+    @field_validator("worker_base_url", "dashboard_base_url")
+    @classmethod
+    def validate_endpoint(cls, value: str | None) -> str | None:
+        """Only distribute HTTPS origins, without embedded credentials."""
+
+        return normalize_https_origin(value) if value is not None else None
 
 
 class HubConfig(BaseModel):

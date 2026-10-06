@@ -35,6 +35,7 @@ RUNTIME_MODULES = (
     "notices.py",
     "output.py",
     "redaction.py",
+    "runtime_config.py",
     "status.py",
     "storage.py",
     "traces.py",
