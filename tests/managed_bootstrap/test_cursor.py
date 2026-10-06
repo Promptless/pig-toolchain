@@ -915,7 +915,7 @@ def test_overlapping_notifications_advance_independently(
 def test_cursor_collect_uploads_only_acknowledged_journal_ranges(tmp_path: Path) -> None:
     """Exercise generated bundle, enrollment, native export, gzip upload and ledger."""
     import gzip
-    from .helpers import _FakeWorkerServer, _policy_with, _run_collect, _run_runtime_json
+    from .helpers import _FakeWorkerServer, _policy_with, _run_collect, _run_runtime_json, _scoped_ledger_path_for_test
 
     hub = tmp_path / "hub"
     init_hub(hub, org="Promptless")
@@ -940,6 +940,9 @@ def test_cursor_collect_uploads_only_acknowledged_journal_ranges(tmp_path: Path)
             "PROMPTLESS_CURSOR_DATABASE": str(native),
         }
         _run_runtime_json(plugin, ["enroll", "--host", "cursor"], env)
+        ledger = _scoped_ledger_path_for_test(
+            ledger, home=tmp_path / "home", worker_base_url=server.base_url, host="cursor"
+        )
         args = ["collect", "--host", "cursor", "--lifecycle", "stop", "--quiet"]
         context = {"conversation_id": "session", "generation_id": "generation"}
         _run_collect(plugin, args, env, context)

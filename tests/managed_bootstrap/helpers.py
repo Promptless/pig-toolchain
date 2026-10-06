@@ -17,6 +17,10 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import pytest
 
 from promptless_instruction_hub.fs import JsonValue, validate_json_value
+from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import Host
+from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.storage import (
+    _scoped_ledger_path,
+)
 
 HOST_RUNTIME_BIN = "promptless-host-runtime"
 HOST_RUNTIME_PACKAGE = "promptless_host_runtime"
@@ -41,6 +45,24 @@ BUNDLE_LOAD_ERROR = (
 def _host_state_path(home: Path) -> Path:
     """Return the host-global enrollment state file shared by pig installations."""
     return home / HOST_STATE_REL_PATH
+
+
+def _scoped_ledger_path_for_test(
+    base_path: Path,
+    *,
+    home: Path,
+    worker_base_url: str,
+    host: Host,
+    deployment_instance_id: str = "worker-local-1",
+) -> Path:
+    state = json.loads(_host_state_path(home).read_text())
+    return _scoped_ledger_path(
+        base_path,
+        worker_base_url=worker_base_url,
+        deployment_instance_id=deployment_instance_id,
+        host_instance_id=_json_string(state["host_instance_id"], "host_instance_id"),
+        host=host,
+    )
 
 
 def _last_status_path(home: Path) -> Path:
@@ -456,10 +478,10 @@ def _invalid_policy(case: str) -> dict[str, JsonValue]:
     return payload
 
 
-def _session_response() -> dict[str, JsonValue]:
+def _session_response(*, deployment_instance_id: str = "worker-local-1") -> dict[str, JsonValue]:
     return {
         "session_id": "11111111-1111-4111-8111-111111111111",
-        "deployment_instance_id": "worker-local-1",
+        "deployment_instance_id": deployment_instance_id,
         "device_code": "plihenroll_devicecode",
         "expires_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5)).isoformat(),
         "poll_interval_seconds": 1,
@@ -482,6 +504,8 @@ class _FakeWorkerServer:
         self,
         *,
         policy: dict[str, JsonValue] | None = None,
+        deployment_instance_id: str = "worker-local-1",
+        host_credential: str = "plihost_localcredential",
         poll_response: dict[str, JsonValue] | None = None,
         post_response: dict[str, JsonValue] | None = None,
         session_response: dict[str, JsonValue] | None = None,
@@ -499,6 +523,8 @@ class _FakeWorkerServer:
         self.session_requests: list[dict[str, JsonValue]] = []
         self.trace_batches: list[dict[str, JsonValue]] = []
         self._session_condition = threading.Condition()
+        _FakeWorkerHandler.deployment_instance_id = deployment_instance_id
+        _FakeWorkerHandler.host_credential = host_credential
         _FakeWorkerHandler.check_ins = self.check_ins
         _FakeWorkerHandler.policy_requests = self.policy_requests
         _FakeWorkerHandler.poll_requests = self.poll_requests
@@ -532,6 +558,8 @@ class _FakeWorkerServer:
 
 
 class _FakeWorkerHandler(BaseHTTPRequestHandler):
+    deployment_instance_id: ClassVar[str] = "worker-local-1"
+    host_credential: ClassVar[str] = "plihost_localcredential"
     check_ins: ClassVar[list[dict[str, JsonValue]]] = []
     policy_requests: ClassVar[list[str]] = []
     poll_requests: ClassVar[list[dict[str, JsonValue]]] = []
@@ -557,7 +585,7 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
             self._write_json(
                 {
                     "status": "ok",
-                    "deployment_instance_id": "worker-local-1",
+                    "deployment_instance_id": self.deployment_instance_id,
                     "worker_version": "0.1.0-test",
                 }
             )
@@ -600,7 +628,7 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
         if (
             parsed.path != "/v0/host-enrollment/policy"
             or target not in (["codex"], ["claude"], ["claude-desktop"], ["cursor"])
-            or self.headers.get("Authorization") != "Bearer plihost_localcredential"
+            or self.headers.get("Authorization") != f"Bearer {self.host_credential}"
         ):
             self.send_response(401)
             self.end_headers()
@@ -617,13 +645,13 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             self.poll_requests.append(payload)
-            self._write_json(dict(self.poll_response or _approved_poll_response()))
+            self._write_json(dict(self.poll_response or _approved_poll_response(host_credential=self.host_credential)))
             return
         if parsed.path == "/v0/traces/batches":
             target = parse_qs(parsed.query).get("target")
             if (
                 target not in (["codex"], ["claude"], ["claude-desktop"], ["cursor"])
-                or self.headers.get("Authorization") != "Bearer plihost_localcredential"
+                or self.headers.get("Authorization") != f"Bearer {self.host_credential}"
             ):
                 self.send_response(401)
                 self.end_headers()
@@ -703,7 +731,7 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
             return
         if (
             self.path != "/v0/host-enrollment/check-ins"
-            or self.headers.get("Authorization") != "Bearer plihost_localcredential"
+            or self.headers.get("Authorization") != f"Bearer {self.host_credential}"
         ):
             self.send_response(401)
             self.end_headers()
@@ -734,7 +762,7 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
         return f"http://{host}:{port}"
 
     def _session_response_payload(self) -> dict[str, JsonValue]:
-        payload = dict(self.session_response or _session_response())
+        payload = dict(self.session_response or _session_response(deployment_instance_id=self.deployment_instance_id))
         payload.setdefault(
             "poll_url",
             f"{self._base_url()}/v1/instruction-hub/host-enrollments/sessions/11111111-1111-4111-8111-111111111111/poll",

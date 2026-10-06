@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -18,6 +19,7 @@ else:
 from .contracts import (
     BootstrapError,
     DIAGNOSTIC_LOG_FILE_NAME,
+    Host,
     JsonValue,
     LAST_STATUS_FILE_NAME,
     LEDGER_FILE_NAME,
@@ -27,10 +29,35 @@ from .validation import _json_object, _non_empty
 
 
 def _ledger_path() -> Path:
+    """Return the configured ledger base; acknowledgement files are scoped siblings."""
     override = _non_empty(os.environ.get("PROMPTLESS_HOST_RUNTIME_LEDGER"))
     if override is not None:
         return Path(override).expanduser()
     return _state_path().with_name(LEDGER_FILE_NAME)
+
+
+def _scoped_ledger_path(
+    base_path: Path,
+    *,
+    worker_base_url: str,
+    deployment_instance_id: str,
+    host_instance_id: str,
+    host: Host,
+) -> Path:
+    """Separate acknowledgements by destination, host identity, and native source.
+
+    Credentials can renew without changing the destination's acknowledged ranges.
+    Claude Desktop shares Claude enrollment but owns a separate upload source.
+    Unscoped ledgers cannot establish which destination acknowledged their offsets.
+    """
+    scope = {
+        "worker_base_url": worker_base_url.rstrip("/"),
+        "deployment_instance_id": deployment_instance_id,
+        "host_instance_id": host_instance_id,
+        "source": host,
+    }
+    scope_hash = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
+    return base_path.with_name(f"{base_path.stem}.{scope_hash}{base_path.suffix}")
 
 
 def _state_path() -> Path:
