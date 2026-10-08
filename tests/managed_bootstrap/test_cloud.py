@@ -35,6 +35,7 @@ from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptles
     BootstrapAuthError,
     BootstrapError,
     JsonValue,
+    RUNTIME_VERSION,
 )
 from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.metadata import (
     _load_runtime_metadata,
@@ -47,7 +48,7 @@ from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptles
     _post_json_response,
 )
 
-from .helpers import _signed_policy
+from .helpers import _policy_with, _signed_policy
 
 _GRANT = "plicg_" + "a" * 43
 
@@ -75,6 +76,7 @@ class _CloudWorker:
         self.redirect_code: int | None = None
         self.redirect_url = ""
         self.lease_overrides: dict[str, JsonValue] = {}
+        self.policy = _signed_policy()
         worker = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -136,7 +138,7 @@ class _CloudWorker:
                     return
                 if parsed.path == "/v0/host-enrollment/policy":
                     assert parse_qs(parsed.query)["target"] in (["claude"], ["codex"])
-                    self._reply(_signed_policy())
+                    self._reply(worker.policy)
                     return
                 if parsed.path == "/v0/traces/batches":
                     assert parse_qs(parsed.query)["target"] == [payload["host"]]
@@ -274,6 +276,41 @@ def _state_root(execution: tuple[Path, dict[str, JsonValue]]) -> Path:
 
 def _upload_requests(worker: _CloudWorker) -> list[_Request]:
     return [request for request in worker.requests if request.path.startswith("/v0/traces/batches")]
+
+
+@pytest.mark.parametrize("target", ["claude", "codex"])
+def test_newer_required_runtime_blocks_capture_without_uploading(
+    execution: tuple[Path, dict[str, JsonValue]], cloud_worker: _CloudWorker, target: str
+) -> None:
+    _write_config(execution[0], cloud_worker.url, target=target)
+    cloud_worker.policy = _policy_with(required_bootstrap_version="999.0.0")
+
+    status = collect_cloud(*execution, drain_seconds=0)
+
+    assert status == {
+        "status": "blocked",
+        "reason": "bootstrap_upgrade_required",
+        "execution_id": "root-session",
+        "uploaded_batches": 0,
+    }
+    root = _state_root(execution)
+    assert json.loads((root / "status.json").read_text()) == status
+    assert not _upload_requests(cloud_worker)
+    assert not list(root.glob("ledger.*.json"))
+
+
+@pytest.mark.parametrize("required_version", [None, "0.0.1", RUNTIME_VERSION])
+def test_compatible_runtime_policy_allows_capture(
+    execution: tuple[Path, dict[str, JsonValue]], cloud_worker: _CloudWorker, required_version: str | None
+) -> None:
+    cloud_worker.policy = _policy_with(required_bootstrap_version=required_version)
+
+    status = collect_cloud(*execution, drain_seconds=0)
+
+    assert status["status"] == "drained"
+    assert status["uploaded_batches"] == 1
+    assert len(_upload_requests(cloud_worker)) == 1
+    assert json.loads((_state_root(execution) / "status.json").read_text()) == status
 
 
 def test_scoped_discovery_does_not_sweep_neighbors_or_symlinked_children(tmp_path: Path) -> None:

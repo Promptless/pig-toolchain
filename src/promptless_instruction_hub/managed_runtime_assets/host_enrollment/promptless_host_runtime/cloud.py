@@ -16,11 +16,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .contracts import BootstrapError, Host, HostCredential, JsonValue, LifecycleEvent, MAX_STDIN_BYTES
+from .contracts import BootstrapError, Host, HostCredential, JsonValue, LifecycleEvent, MAX_STDIN_BYTES, RUNTIME_VERSION
 from .metadata import _load_runtime_metadata
 from .storage import _load_state, _scoped_ledger_path, _state_file_lock, _write_state
 from .traces import _hook_trace_context, _upload_source_paths
-from .validation import _datetime_value, _decode_json_object, _string_value
+from .validation import _datetime_value, _decode_json_object, _requires_newer_bootstrap, _string_value
 from .worker import _get_json, _post_json_response, _validate_signed_policy
 
 
@@ -195,6 +195,10 @@ def collect_cloud(
             ),
             config.target,
         )
+        if _requires_newer_bootstrap(policy.required_bootstrap_version, RUNTIME_VERSION):
+            status.update({"status": "blocked", "reason": "bootstrap_upgrade_required"})
+            _write_state(status_path, status)
+            return status
         ledger = _scoped_ledger_path(
             root / "ledger.json",
             worker_base_url=config.worker_url,
