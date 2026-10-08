@@ -14,6 +14,7 @@ from typing import cast
 
 from promptless_instruction_hub.config import EXTERNAL_LOCK_PATH, RELEASE_MANIFEST_PATH
 from promptless_instruction_hub.errors import InstructionHubError
+from promptless_instruction_hub.external_credentials import git_config, git_environment
 from promptless_instruction_hub.external_lock import (
     ExternalPluginLock,
     apply_external_resolutions,
@@ -240,10 +241,22 @@ def _verify_external_plugins(
 
 
 def _fetch_revision(root: Path, url: str, requested: str) -> GitRevision:
+    environment = git_environment(url)
     root.mkdir()
     _git(root, "init", "--bare", "--quiet")
     try:
-        _git(root, "fetch", "--quiet", "--no-tags", "--depth=1", "--recurse-submodules=no", "--", url, requested)
+        _git(
+            root,
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--depth=1",
+            "--recurse-submodules=no",
+            "--",
+            url,
+            requested,
+            environment=environment,
+        )
     except InstructionHubError as exc:
         raise InstructionHubError(
             f"cannot fetch external plugin revision {requested} from {url}; check the revision and repository access"
@@ -259,11 +272,12 @@ def _fetch_revision(root: Path, url: str, requested: str) -> GitRevision:
     return GitRevision(root, sha, files)
 
 
-def _git(root: Path, *arguments: str) -> str:
+def _git(root: Path, *arguments: str, environment: dict[str, str] | None = None) -> str:
+    environment = git_environment() if environment is None else environment
     try:
         result = subprocess.run(
-            ["git", "-c", f"core.hooksPath={os.devnull}", "-C", str(root), *arguments],
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"},
+            ["git", "-c", f"core.hooksPath={os.devnull}", *git_config(environment), "-C", str(root), *arguments],
+            env=environment,
             text=True,
             capture_output=True,
             timeout=60,
