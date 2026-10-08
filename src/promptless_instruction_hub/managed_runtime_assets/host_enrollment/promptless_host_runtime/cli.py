@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import BinaryIO, cast
 from urllib.parse import urlencode
 
+from .cloud import run_cloud_command
 from .contracts import (
     BootstrapAuthError,
     BootstrapError,
@@ -88,6 +89,12 @@ def main(argv: list[str] | None = None) -> int:
     """Run the requested host-runtime command."""
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
+    if args.command == "cloud-collect":
+        try:
+            return run_cloud_command(args.config, detach=args.detach, event_file=args.event_file)
+        except (BootstrapError, OSError, ValueError, urllib.error.URLError) as exc:
+            print(f"Cloud capture failed ({type(exc).__name__}); inspect the execution status file", file=sys.stderr)
+            return 1
     if args.command == "cursor-notify":
         try:
             return _run_cursor_notify(_read_hook_context(), _lifecycle_event(args.lifecycle))
@@ -147,6 +154,10 @@ def main(argv: list[str] | None = None) -> int:
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=RUNTIME_EXECUTABLE, description="Promptless host runtime")
     subcommands = parser.add_subparsers(dest="command", required=True)
+    cloud_parser = subcommands.add_parser("cloud-collect", help="Enroll and export one cloud execution")
+    cloud_parser.add_argument("--config", type=Path, required=True)
+    cloud_parser.add_argument("--detach", action="store_true")
+    cloud_parser.add_argument("--event-file", type=Path, help=argparse.SUPPRESS)
     cursor_parser = subcommands.add_parser("cursor-notify", help=argparse.SUPPRESS)
     cursor_parser.add_argument(
         "--lifecycle", required=True, choices=("session_start", "stop", "session_end", "subagent_stop")

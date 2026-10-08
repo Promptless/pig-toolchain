@@ -993,7 +993,13 @@ def _post_upload_batch(
     batch: UploadBatch,
 ) -> dict[str, JsonValue]:
     try:
-        response = _post_json_response(upload_url, credential.value, batch.request, label="trace batch response")
+        response = _post_json_response(
+            upload_url,
+            credential.value,
+            batch.request,
+            label="trace batch response",
+            producer_token=credential.producer_token,
+        )
     except WorkerResponseError as exc:
         conflict = _trace_source_sequence_conflict(exc, batch)
         if conflict is None:

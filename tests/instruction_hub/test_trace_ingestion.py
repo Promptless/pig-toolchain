@@ -66,7 +66,7 @@ def test_disabled_build_preserves_instructions_and_mcp_without_runtime(
     def unexpected_runtime_copy(*args: object, **kwargs: object) -> None:
         pytest.fail("disabled ingestion must not copy a runtime")
 
-    monkeypatch.setattr("promptless_instruction_hub.managed_runtime._copy_runtime_bundle", unexpected_runtime_copy)
+    monkeypatch.setattr("promptless_instruction_hub.managed_runtime.copy_host_runtime_bundle", unexpected_runtime_copy)
     before = _snapshot_tree(tmp_path)
     verified = verify_hub(tmp_path)
     assert _snapshot_tree(tmp_path) == before

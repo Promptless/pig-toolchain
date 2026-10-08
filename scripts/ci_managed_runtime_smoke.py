@@ -24,6 +24,7 @@ RUNTIME_PACKAGE = "promptless_host_runtime"
 RUNTIME_MODULES = (
     "__init__.py",
     "cli.py",
+    "cloud.py",
     "contracts.py",
     "cursor/__init__.py",
     "cursor/capture.py",
