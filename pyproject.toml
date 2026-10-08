@@ -12,6 +12,11 @@ dependencies = [
 promptless-instruction-hub = "promptless_instruction_hub.cli:main"
 pig = "promptless_instruction_hub.cli:main"
 
+[project.optional-dependencies]
+mcp = [
+    "mcp>=2.3,<3",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -22,6 +27,7 @@ packages = ["src/promptless_instruction_hub"]
 [dependency-groups]
 dev = [
     "jsonschema>=4.0.0",
+    "mcp>=2.3,<3",
     "pytest>=7.4.0",
     "pytest-xdist>=3.8.0",
     "ruff>=0.6.2",

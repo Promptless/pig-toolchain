@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -84,6 +85,19 @@ def _build_parser() -> argparse.ArgumentParser:
     publish_version_parser.add_argument("--previous-release-root", type=Path)
     publish_version_parser.add_argument("--hub-relative-path", default="")
 
+    serve_parser = subcommands.add_parser("serve-mcp", help="serve a compiled MCP bundle (requires the mcp extra)")
+    serve_parser.add_argument("--bundle", type=Path, default=Path("dist/mcp"))
+    serve_parser.add_argument("--plugin", action="append", help="restrict exposed plugins; repeat to include several")
+    serve_parser.add_argument("--transport", choices=("stdio", "streamable-http"), default="stdio")
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.add_argument(
+        "--token-env", default="INSTRUCTION_HUB_MCP_TOKEN", help="environment variable holding HTTP bearer token"
+    )
+    serve_parser.add_argument(
+        "--allowed-host", action="append", help="additional allowed HTTP Host, optionally with :port or :*"
+    )
+
     return parser
 
 
@@ -92,6 +106,23 @@ def _add_hub_arg(parser: argparse.ArgumentParser) -> None:
 
 
 def _dispatch(args: argparse.Namespace) -> int:
+    if args.command == "serve-mcp":
+        try:
+            from promptless_instruction_hub.mcp_distribution.server import serve
+        except ModuleNotFoundError as exc:
+            raise InstructionHubError(
+                "serve-mcp requires the MCP extra: install 'promptless-instruction-hub[mcp]'"
+            ) from exc
+        serve(
+            args.bundle,
+            plugins=set(args.plugin) if args.plugin else None,
+            transport=args.transport,
+            host=args.host,
+            port=args.port,
+            token=os.environ.get(args.token_env),
+            allowed_hosts=args.allowed_host,
+        )
+        return 0
     if args.command == "init":
         root = init_hub(
             args.hub,

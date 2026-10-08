@@ -97,6 +97,14 @@ class TraceIngestionConfig(BaseModel):
     enabled: bool = Field(default=False, strict=True)
 
 
+class McpDistributionConfig(BaseModel):
+    """Opt-in distribution channel, independent of the executing harness."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=False, strict=True)
+
+
 class HubConfig(BaseModel):
     """Root `hub.yaml` configuration."""
 
@@ -108,6 +116,7 @@ class HubConfig(BaseModel):
     stable_plugins: list[str] = Field(default_factory=lambda: [PIG_PLUGIN_ID], min_length=1)
     targets: list[Harness] = Field(default_factory=lambda: list(SUPPORTED_HARNESSES), min_length=1)
     trace_ingestion: TraceIngestionConfig = Field(default_factory=TraceIngestionConfig)
+    mcp: McpDistributionConfig = Field(default_factory=McpDistributionConfig)
 
     @field_validator("version")
     @classmethod

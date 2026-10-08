@@ -7,6 +7,7 @@ from pathlib import Path
 from promptless_instruction_hub.config import RELEASE_MANIFEST_PATH, STABLE_CHANNEL_PATH
 from promptless_instruction_hub.fs import JsonValue, directory_hash, write_json
 from promptless_instruction_hub.managed_runtime import ManagedRuntimeRecord
+from promptless_instruction_hub.mcp_distribution.compiler import BUNDLE_PATH
 from promptless_instruction_hub.models import (
     ResolvedHubPluginDefinition,
     ResolvedExternalPluginDefinition,
@@ -26,9 +27,15 @@ def build_release_manifest(
 
     target_hashes = build_target_hashes(output_root, validation)
     base_manifest: dict[str, JsonValue] = {
-        "schema_version": 3
-        if any(isinstance(plugin.definition, ResolvedExternalPluginDefinition) for plugin in validation.stable_plugins)
-        else 2,
+        "schema_version": 4
+        if validation.config.mcp.enabled
+        else (
+            3
+            if any(
+                isinstance(plugin.definition, ResolvedExternalPluginDefinition) for plugin in validation.stable_plugins
+            )
+            else 2
+        ),
         "org": validation.config.org,
         "version": validation.config.version,
         "marketplace": {
@@ -42,6 +49,8 @@ def build_release_manifest(
         "assets": [_asset_manifest(asset) for asset in validation.stable_assets],
         "version_basis": build_release_version_basis(output_root, validation, managed_runtimes),
     }
+    if validation.config.mcp.enabled:
+        base_manifest["mcp_bundle"] = _mcp_bundle_record(output_root)
     content_hash = stable_hash(base_manifest)
     base_manifest["release_id"] = f"{validation.config.version}+{content_hash[:12]}"
     base_manifest["release_hash"] = stable_hash(base_manifest)
@@ -55,7 +64,7 @@ def build_release_version_basis(
 ) -> dict[str, JsonValue]:
     """Return the output-affecting state that should move plugin versions."""
 
-    return {
+    basis: dict[str, JsonValue] = {
         "org": validation.config.org,
         "version": validation.config.version,
         "marketplace": {
@@ -68,6 +77,14 @@ def build_release_version_basis(
         "target_hashes": build_target_hashes(output_root, validation),
         "managed_runtimes": [runtime.to_manifest() for runtime in managed_runtimes],
     }
+
+    if validation.config.mcp.enabled:
+        basis["mcp_bundle"] = _mcp_bundle_record(output_root)
+    return basis
+
+
+def _mcp_bundle_record(output_root: Path) -> dict[str, JsonValue]:
+    return {"path": BUNDLE_PATH.as_posix(), "sha256": directory_hash(output_root / BUNDLE_PATH)}
 
 
 def build_target_hashes(
