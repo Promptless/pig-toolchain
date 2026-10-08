@@ -229,6 +229,23 @@ or compare generated files in the source worktree, whether verification
 succeeds or fails. Use `pig build --check` instead when the repository
 intentionally commits generated artifacts and must prove they are current.
 
+### Distribute a hub over MCP
+
+Add `mcp: {enabled: true}` to `hub.yaml`, then run `pig build --hub .`.
+The compiler adds a deterministic `dist/mcp` bundle alongside the marketplaces.
+Install the toolchain with its `mcp` extra to serve it:
+
+```bash
+pig serve-mcp --bundle dist/mcp --plugin dev
+```
+
+This defaults to stdio. Skills use the MCP skills extension; all six authored
+asset types have resources and retrieval tools. Commands also have portable
+prompt projections, and agents have delegation skill projections. Execution,
+hook registration, and upstream MCP connections remain client responsibilities.
+See [MCP distribution](docs/mcp-distribution.md) for HTTP serving, authentication,
+compatibility limits, and the Dots acceptance checklist.
+
 ## Development
 
 Run the full test suite in parallel:
@@ -609,10 +626,12 @@ Hubs follow the latest merged toolchain on `main`. GitHub callers use `@main`;
 GitLab callers use the `/main/` template URL and the default `toolchain-ref: main`.
 Resolved commit hashes in CI logs identify the compiler used for a build.
 
-Releases containing external plugins use manifest schema 3 and record their
+Releases with MCP distribution enabled use manifest schema 4 and record the
+`dist/mcp` directory hash in `mcp_bundle` and `version_basis.mcp_bundle`.
+Without MCP, releases containing external plugins use schema 3 and record their
 provenance in `version_basis.plugins`; authored-only releases use schema 2.
-The publisher accepts both. Upgrade older toolchains before consuming schema 3
-releases.
+The publisher accepts all three. Upgrade older toolchains before consuming
+schema 3 or 4 releases.
 
 The publisher stores verified upstream versions in release-side
 `hub.external.json`, bound to the release hash and exact source declarations.

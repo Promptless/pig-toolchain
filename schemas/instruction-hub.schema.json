@@ -42,6 +42,12 @@
       "uniqueItems": true,
       "default": ["pig"]
     },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"enabled": {"type": "boolean", "default": false}},
+      "default": {"enabled": false}
+    },
     "trace_ingestion": {
       "type": "object",
       "additionalProperties": false,

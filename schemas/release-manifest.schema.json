@@ -22,7 +22,8 @@
     "schema_version": {
       "enum": [
         2,
-        3
+        3,
+        4
       ]
     },
     "org": {
@@ -294,6 +295,9 @@
               }
             ]
           }
+        },
+        "mcp_bundle": {
+          "$ref": "#/$defs/mcp_bundle"
         }
       }
     },
@@ -334,6 +338,9 @@
         "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
       },
       "uniqueItems": true
+    },
+    "mcp_bundle": {
+      "$ref": "#/$defs/mcp_bundle"
     }
   },
   "$defs": {
@@ -497,6 +504,22 @@
           }
         }
       }
+    },
+    "mcp_bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "const": "dist/mcp"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
     }
   },
   "allOf": [
@@ -517,6 +540,37 @@
                   "$ref": "#/$defs/authored_plugin"
                 }
               }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": 4
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "mcp_bundle"
+        ],
+        "properties": {
+          "version_basis": {
+            "required": [
+              "mcp_bundle"
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "mcp_bundle": false,
+          "version_basis": {
+            "properties": {
+              "mcp_bundle": false
             }
           }
         }

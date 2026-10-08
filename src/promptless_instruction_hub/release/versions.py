@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from promptless_instruction_hub.config import RELEASE_MANIFEST_PATH
 from promptless_instruction_hub.external_lock import load_external_resolutions
 from promptless_instruction_hub.fs import JsonValue, read_json_mapping
+from promptless_instruction_hub.mcp_distribution.compiler import render_mcp_bundle
 from promptless_instruction_hub.models import (
     ASSET_KINDS,
     IDENTIFIER_RE,
@@ -163,7 +164,12 @@ def _validate_release_manifest(
     version: str,
     version_basis: dict[str, JsonValue],
 ) -> None:
-    _require_exact_keys(manifest_path, manifest, "release manifest", RELEASE_MANIFEST_KEYS)
+    _require_exact_keys(
+        manifest_path,
+        manifest,
+        "release manifest",
+        RELEASE_MANIFEST_KEYS | ({"mcp_bundle"} if manifest.get("schema_version") == 4 else set()),
+    )
     _validate_schema_version(manifest_path, manifest)
     _validate_release_manifest_assets(manifest_path, manifest, version_basis)
     _validate_release_identity(manifest_path, manifest, version)
@@ -171,8 +177,8 @@ def _validate_release_manifest(
 
 def _validate_schema_version(manifest_path: Path, manifest: dict[str, JsonValue]) -> None:
     schema_version = _lookup_path(manifest_path, manifest, "schema_version")
-    if isinstance(schema_version, bool) or not isinstance(schema_version, int) or schema_version not in {2, 3}:
-        msg = f"{manifest_path}: schema_version must be 2 or 3"
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int) or schema_version not in {2, 3, 4}:
+        msg = f"{manifest_path}: schema_version must be 2, 3, or 4"
         raise ValueError(msg)
 
 
@@ -268,6 +274,7 @@ def _build_current_version_basis(
             versioned_validation.config,
             versioned_validation.stable_plugins,
         )
+        render_mcp_bundle(output_root, versioned_validation)
         return build_release_version_basis(output_root, versioned_validation, managed_runtimes)
 
 
@@ -288,7 +295,20 @@ def _validate_manifest_version_basis(
     manifest: dict[str, JsonValue],
     basis: dict[str, JsonValue],
 ) -> None:
-    _require_exact_keys(manifest_path, basis, "version_basis", VERSION_BASIS_KEYS)
+    _require_exact_keys(
+        manifest_path,
+        basis,
+        "version_basis",
+        VERSION_BASIS_KEYS | ({"mcp_bundle"} if manifest.get("schema_version") == 4 else set()),
+    )
+    if manifest.get("schema_version") == 4:
+        record = _require_mapping(manifest_path, basis, "mcp_bundle")
+        _require_exact_keys(manifest_path, record, "mcp_bundle", frozenset({"path", "sha256"}))
+        if record.get("path") != "dist/mcp":
+            raise ValueError(f"{manifest_path}: mcp_bundle.path must be dist/mcp")
+        _validate_sha256(manifest_path, _require_string(manifest_path, record, "sha256"), "mcp_bundle.sha256")
+        if manifest.get("mcp_bundle") != record:
+            raise ValueError(f"{manifest_path}: version_basis.mcp_bundle must match mcp_bundle")
     _validate_marketplace_object(
         manifest_path,
         _require_mapping_value(manifest_path, basis["marketplace"], "version_basis.marketplace"),
@@ -341,8 +361,8 @@ def _validate_manifest_version_basis(
     for index, plugin_value in enumerate(plugins):
         package = _require_mapping_value(manifest_path, plugin_value, f"version_basis.plugins[{index}]")
         if package.get("kind") == "external":
-            if manifest.get("schema_version") != 3:
-                raise ValueError(f"{manifest_path}: external plugins require schema_version 3")
+            if manifest.get("schema_version") not in {3, 4}:
+                raise ValueError(f"{manifest_path}: external plugins require schema_version 3 or 4")
             if not set(_require_mapping(manifest_path, package, "targets")).intersection(targets):
                 raise ValueError(f"{manifest_path}: external plugin has no enabled Hub target")
         plugin_ids.append(_validate_plugin_basis(manifest_path, package, f"version_basis.plugins[{index}]"))

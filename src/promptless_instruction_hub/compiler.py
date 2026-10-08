@@ -19,6 +19,7 @@ from promptless_instruction_hub.config import (
 from promptless_instruction_hub.errors import BuildCheckFailedError
 from promptless_instruction_hub.external_lock import load_external_resolutions
 from promptless_instruction_hub.fs import JsonValue, replace_tree, trees_equal, write_yaml
+from promptless_instruction_hub.mcp_distribution.compiler import render_mcp_bundle
 from promptless_instruction_hub.models import (
     PIG_PLUGIN_ID,
     PIG_PLUGIN_NAME,
@@ -163,6 +164,7 @@ def verify_hub(hub_root: Path) -> VerifyResult:
 
 def _compile_hub(output_root: Path, validation: ValidationResult[ResolvedHubPluginDefinition]) -> dict[str, JsonValue]:
     managed_runtimes = render_target_plugins(output_root, validation.config, validation.stable_plugins)
+    render_mcp_bundle(output_root, validation)
     release_manifest = build_release_manifest(output_root, validation, managed_runtimes)
     write_release_files(output_root, release_manifest)
     embed_release_manifest(output_root, validation.config, validation.stable_plugins, release_manifest)
