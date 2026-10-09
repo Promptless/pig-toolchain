@@ -512,7 +512,7 @@ class _FakeWorkerServer:
         session_barrier_count: int = 0,
         callback_state_override: str | None = None,
         pending_approval_url_override: str | None = None,
-        pending_approval_path: str = "/instruction-hub/enroll",
+        pending_approval_path: str = "/pig/enroll",
         unparsed_record_count: int = 0,
         enforce_trace_watermarks: bool = False,
         drop_next_trace_response_after_commit: bool = False,
@@ -573,7 +573,7 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
     session_requests: ClassVar[list[dict[str, JsonValue]]] = []
     callback_state_override: ClassVar[str | None] = None
     pending_approval_url_override: ClassVar[str | None] = None
-    pending_approval_path: ClassVar[str] = "/instruction-hub/enroll"
+    pending_approval_path: ClassVar[str] = "/pig/enroll"
     unparsed_record_count: ClassVar[int] = 0
     enforce_trace_watermarks: ClassVar[bool] = False
     drop_next_trace_response_after_commit: ClassVar[bool] = False
@@ -590,7 +590,7 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
                 }
             )
             return
-        if parsed.path == "/instruction-hub/enroll/start":
+        if parsed.path == "/pig/enroll/start":
             payload = self._single_value_query_payload(parsed.query)
             callback_url = _json_string(payload.get("callback_url"), "callback_url")
             if callback_url is None:
@@ -613,7 +613,7 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
                 return
             self._redirect(hosted_approval_url)
             return
-        if parsed.path == "/instruction-hub/enroll":
+        if parsed.path == "/pig/enroll":
             payload = self._single_value_query_payload(parsed.query)
             callback_url = _json_string(payload.pop("callback_url", None), "callback_url")
             if callback_url is None:
@@ -638,7 +638,7 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlsplit(self.path)
-        if self.path == "/v1/instruction-hub/host-enrollments/sessions/11111111-1111-4111-8111-111111111111/poll":
+        if self.path == "/v1/pig/host-enrollments/sessions/11111111-1111-4111-8111-111111111111/poll":
             payload = self._read_json_request("session poll request")
             if payload.get("device_code") != "plihenroll_devicecode":
                 self.send_response(401)
@@ -765,7 +765,7 @@ class _FakeWorkerHandler(BaseHTTPRequestHandler):
         payload = dict(self.session_response or _session_response(deployment_instance_id=self.deployment_instance_id))
         payload.setdefault(
             "poll_url",
-            f"{self._base_url()}/v1/instruction-hub/host-enrollments/sessions/11111111-1111-4111-8111-111111111111/poll",
+            f"{self._base_url()}/v1/pig/host-enrollments/sessions/11111111-1111-4111-8111-111111111111/poll",
         )
         return payload
 
