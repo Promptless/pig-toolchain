@@ -22,6 +22,7 @@ from promptless_instruction_hub.mcp_distribution.models import (
     BundleSkill,
     Compatibility,
 )
+from promptless_instruction_hub.mcp_distribution.skill_tools import project_skill_tools
 from promptless_instruction_hub.models import LoadedAsset, ResolvedExternalPluginDefinition, ResolvedHubPluginDefinition
 from promptless_instruction_hub.release.hashing import stable_hash
 from promptless_instruction_hub.validate.hub import ValidationResult
@@ -85,6 +86,7 @@ def render_mcp_bundle(output_root: Path, validation: ValidationResult[ResolvedHu
         for asset in plugin.assets:
             memberships.setdefault(asset.ref, []).append(definition.id)
     assets = [_compile_asset(root, asset, sorted(memberships[asset.ref])) for asset in validation.stable_assets]
+    project_skill_tools(assets)
     files = [file for asset in assets for file in asset.files]
     if len(files) > MAX_BUNDLE_FILES or sum(file.size for file in files) > MAX_BUNDLE_BYTES:
         raise InstructionHubError("MCP bundle exceeds 10,000 files or 256 MiB")

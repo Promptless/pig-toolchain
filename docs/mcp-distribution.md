@@ -36,8 +36,9 @@ For an installed toolchain, install it with the `mcp` extra, for example
 `pig serve-mcp`. The server defaults to stdio and keeps protocol output on stdout.
 Repeat `--plugin` to select several plugins; omit it to expose all stable plugins.
 Unknown plugin IDs fail startup. Every protocol surface uses the same selection,
-including direct reads of guessed URIs. A shared asset appears once and records
-only its selected plugin memberships.
+including direct reads of guessed URIs. A shared asset appears once in the asset
+catalog and records only its selected plugin memberships. Skill-loading tools
+have one alias per selected plugin membership.
 
 For Streamable HTTP:
 
@@ -65,9 +66,9 @@ support supplying this credential, or a later authentication adapter is needed.
 
 | Asset | Delivered representation | Behavior the client must supply |
 | --- | --- | --- |
-| Skill | Skills extension entry plus all supporting files | Load instructions, materialize relative files when needed, provide dependencies and authorized execution. |
+| Skill | Plugin-prefixed loading tool, skills extension entry, and all supporting files | Load instructions, materialize relative files when needed, provide dependencies and authorized execution. |
 | Command | MCP prompt plus original source | Explicit user invocation and execution. Host macros or argument syntax outside the portable subset remain resources-only. |
-| Agent | Delegation skill plus original source | Spawn a child agent. Tool restrictions are advisory; model overrides are omitted. The generated skill stops if delegation is unavailable. |
+| Agent | Plugin-prefixed loading tool, delegation skill, and original source | Spawn a child agent. Tool restrictions are advisory; model overrides are omitted. The generated skill stops if delegation is unavailable. |
 | Rule | Original resource, including authored scope metadata | Scope matching, precedence, and activation. Delivery does not provide always-on enforcement. |
 | Hook | Source files and structured hook declaration | Host lifecycle events, registration, and execution. The server cannot fire hooks. |
 | MCP configuration | Original connection definition | Connect to upstream servers and supply their credentials. The distributor does not proxy their tools or interpolate secrets. |
@@ -108,13 +109,34 @@ different assets without rewriting their frontmatter.
 
 `resources/list` exposes all selected files and a selected `catalog.json`.
 `prompts/list` and `prompts/get` expose portable commands without arguments.
-Two read-only tools provide a fallback for clients exposing only MCP tools:
+Every projected skill is also an ordinary read-only MCP tool. A skill with asset
+ID `review-change` in plugin `dev` is named `dev__load_skill_review-change`.
+Delegation skill tools use `dev__load_agent_<asset-id>`. Names use stable plugin
+and asset IDs; editing frontmatter does not rename a tool. A skill shared by
+several plugins has an alias for each selected plugin.
+
+Names are limited to 64 characters for tool-client compatibility. Long asset IDs
+are shortened with an eight-character SHA-256 suffix; the complete plugin prefix
+is preserved. Shortening requires room for an asset-ID character, separator, and
+digest; an overlong plugin prefix fails compilation and catalog loading with a
+request to shorten the plugin ID. Duplicate generated names also fail.
+
+Tool descriptions preserve the authored skill trigger and identify the operation
+as loading instructions. These tools accept no arguments and return the complete
+`SKILL.md`, compatibility information, plugin and bundle identity, and supporting
+files with relative paths and exact `read_asset` arguments. This operation does
+not run scripts or carry out the workflow. The client follows the instructions
+with its available capabilities and authorization. Supporting-file calls include
+`bundle_id` to prevent reads from a different release after a server replacement.
+
+Two additional read-only tools provide general catalog access:
 
 - `search_assets`: discover by words, optional asset kind, and cursor; an empty
   query lists assets. Returns metadata, compatibility requirements, and paths.
 - `read_asset`: retrieve a discovered asset by `ref` and optional exact file
-  path. The default reads the skill entrypoint or first source file. Binary
-  content uses base64; text uses UTF-8. No source code is executed.
+  path. Pass the returned `bundle_id` to bind the read to that release; a different
+  bundle ID is rejected. The default reads the skill entrypoint or first source
+  file. Binary content uses base64; text uses UTF-8. No source code is executed.
 
 List methods paginate. Cursors are bound to the bundle, selected plugins, and
 query. Skills list/get return `resultType: complete`, `ttlMs: 0`, and
@@ -161,10 +183,12 @@ SDK tests exercise modern skills discovery and legacy tool retrieval, including
 stdio and authenticated HTTP. They do not establish Dots compatibility. Use a
 small plugin selection and a deployed test endpoint to verify:
 
-1. Connection and authentication, discovery of retrieval tools, and whether Dots
+1. Connection and authentication, discovery of plugin-prefixed skill tools across
+   every `tools/list` page, and whether Dots
    also exposes resources, prompts, and the skills extension.
-2. Discovery from a task matching a skill description, followed by retrieval of
-   the complete skill and a supporting file; confirm the expected bundle ID.
+2. A natural task matching a skill description selects the corresponding loading
+   tool without a prompt to search the hub. Confirm retrieval of the complete
+   skill and a supporting file from the same bundle ID, then workflow execution.
 3. Relative-file materialization and an explicitly authorized harmless script,
    if Dots provides execution. Missing dependencies must surface as limitations.
 4. Explicit command invocation and child-agent delegation, if supported. Verify

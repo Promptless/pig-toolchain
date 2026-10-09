@@ -28,6 +28,7 @@ from promptless_instruction_hub.mcp_distribution.models import (
     SkillEntry,
     SkillResource,
 )
+from promptless_instruction_hub.mcp_distribution.skill_tools import project_skill_tools
 from promptless_instruction_hub.models import validate_identifier
 from promptless_instruction_hub.release.hashing import stable_hash
 
@@ -107,6 +108,7 @@ class Catalog:
                 if asset.prompt.name in self.prompts:
                     raise InstructionHubError("MCP bundle has duplicate prompt names")
                 self.prompts[asset.prompt.name] = selected
+        self.skill_tools = project_skill_tools(self.assets.values())
         self.catalog_uri = f"hub://{self.manifest.marketplace.id}/{self.manifest.bundle_id}/catalog.json"
         catalog = self.manifest.model_dump(mode="json", exclude={"assets", "plugins"})
         catalog["plugins"] = [p.model_dump(mode="json") for p in self.manifest.plugins if p.id in self.plugins]
@@ -141,6 +143,28 @@ class Catalog:
             except UnicodeDecodeError:
                 pass  # The binary representation preserves bytes even for mislabeled text.
         return dict(result, blob=base64.b64encode(data).decode("ascii"))
+
+    def load_skill_tool(self, name: str) -> dict[str, JsonValue]:
+        """Load instructions and exact supporting-file reads from this immutable release."""
+        tool = self.skill_tools.get(name)
+        if tool is None or tool.asset.skill is None:
+            raise ValueError("skill tool not found in this bundle and plugin selection")
+        asset, skill = tool.asset, tool.asset.skill
+        root = Path(skill.entrypoint).parent
+        return {
+            "bundle_id": self.manifest.bundle_id,
+            "plugin": tool.plugin,
+            "asset": self.describe(asset),
+            "content": self.read(self.file_uris[skill.entrypoint]),
+            "supporting_files": [
+                {
+                    "path": Path(path).relative_to(root).as_posix(),
+                    "read_asset": {"bundle_id": self.manifest.bundle_id, "ref": asset.ref, "path": path},
+                }
+                for path in skill.files
+                if path != skill.entrypoint
+            ],
+        }
 
     def page(self, items: list[T], cursor: str | None, key: str, limit: int = 50) -> tuple[list[T], str | None]:
         scope = stable_hash(

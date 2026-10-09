@@ -21,6 +21,7 @@ from promptless_instruction_hub.compiler import build_hub, init_hub, verify_hub
 from promptless_instruction_hub.errors import BuildCheckFailedError, InstructionHubError
 from promptless_instruction_hub.mcp_distribution.catalog import Catalog
 from promptless_instruction_hub.mcp_distribution.compiler import read_frontmatter
+from promptless_instruction_hub.mcp_distribution.skill_tools import project_skill_tools
 from promptless_instruction_hub.mcp_distribution.server import (
     GetSkillParams,
     GetSkillResult,
@@ -380,7 +381,13 @@ def test_protocol_roundtrip_and_scoped_errors(hub: Path) -> None:
             prompt = await client.get_prompt("command:release")
             assert prompt.messages[0].content == types.TextContent(type="text", text="Review then publish.\n")
             tools = await client.list_tools()
-            assert [tool.name for tool in tools.tools] == ["search_assets", "read_asset"]
+            assert [tool.name for tool in tools.tools] == [
+                "search_assets",
+                "read_asset",
+                "dev__load_agent_reviewer",
+                "dev__load_skill_review",
+                "ops__load_skill_review",
+            ]
             result = await client.call_tool("search_assets", {"query": "review changes", "kind": "skill"})
             assert not result.is_error
             assert result.structured_content["assets"][0]["ref"] == "skill:review"
@@ -405,6 +412,94 @@ def test_protocol_roundtrip_and_scoped_errors(hub: Path) -> None:
             with pytest.raises(MCPError) as error:
                 await client.read_resource(agent_uri)
             assert isinstance(error.value, MCPError) and error.value.code == -32602
+
+    anyio.run(run)
+
+
+def test_skill_tools_load_instructions_and_supporting_files(hub: Path) -> None:
+    async def run() -> None:
+        catalog = Catalog(hub / "dist/mcp", {"ops"})
+        async with Client(create_server(catalog)) as client:
+            listed = await client.list_tools()
+            assert [tool.name for tool in listed.tools] == ["search_assets", "read_asset", "ops__load_skill_review"]
+            loader = listed.tools[-1]
+            jsonschema.validate({}, loader.input_schema)
+            with pytest.raises(jsonschema.ValidationError):
+                jsonschema.validate({"task": "run it"}, loader.input_schema)
+            assert loader.annotations is not None and loader.annotations.read_only_hint
+            loaded = await client.call_tool(loader.name, {})
+            assert not loaded.is_error
+            result = loaded.structured_content
+            assert result is not None
+            assert result["bundle_id"] == catalog.manifest.bundle_id
+            assert result["plugin"] == "ops"
+            assert result["content"]["text"] == (hub / "assets/skills/review/SKILL.md").read_text()
+            assert result["asset"]["plugins"] == ["ops"]
+            references = {file["path"]: file["read_asset"] for file in result["supporting_files"]}
+            assert set(references) == {"sample.bin", "scripts/check.py"}
+            for path, arguments in references.items():
+                read = await client.call_tool("read_asset", arguments)
+                content = read.structured_content["content"]
+                data = content["text"].encode() if "text" in content else base64.b64decode(content["blob"])
+                assert data == (hub / "assets/skills/review" / path).read_bytes()
+                assert read.structured_content["bundle_id"] == result["bundle_id"]
+            assert (await client.call_tool(loader.name, {"task": "run it"})).is_error
+            assert (await client.call_tool("read_asset", {"bundle_id": "0" * 64, "ref": "skill:review"})).is_error
+            with pytest.raises(MCPError):
+                await client.call_tool("dev__load_skill_review", {})
+
+    anyio.run(run)
+
+
+def test_skill_tool_names_are_stable_bounded_and_unambiguous(hub: Path) -> None:
+    catalog = Catalog(hub / "dist/mcp")
+    skill = catalog.assets["skill:review"]
+    names = set(project_skill_tools([skill]))
+    assert names == {"dev__load_skill_review", "ops__load_skill_review"}
+    changed = skill.model_copy(deep=True)
+    assert changed.skill is not None
+    changed.skill.frontmatter.update(name="new-name", description="A different trigger.")
+    assert set(project_skill_tools([changed])) == names
+    long_assets = [
+        skill.model_copy(update={"id": "review-" * 20 + suffix, "ref": "skill:" + "review-" * 20 + suffix})
+        for suffix in ("one", "two")
+    ]
+    tools = project_skill_tools(long_assets)
+    assert len(tools) == 4
+    assert all(len(name) == 64 and name.startswith(f"{tool.plugin}__load_skill_") for name, tool in tools.items())
+    assert list(project_skill_tools(reversed(long_assets))) == list(tools)
+    exact = skill.model_copy(update={"plugins": ["p" * 45]})
+    assert list(project_skill_tools([exact])) == ["p" * 45 + "__load_skill_review"]
+    with pytest.raises(InstructionHubError, match="collision"):
+        project_skill_tools([skill, skill])
+    with pytest.raises(InstructionHubError, match="shorten the plugin id"):
+        project_skill_tools([skill.model_copy(update={"plugins": ["long-" * 12 + "plugin"]})])
+
+
+def test_skill_tools_paginate_all_plugin_memberships(hub: Path) -> None:
+    config_path = hub / "hub.yaml"
+    config = yaml.safe_load(config_path.read_text())
+    for index in range(55):
+        plugin = f"team-{index:02}"
+        config["stable_plugins"].append(plugin)
+        (hub / "plugins" / f"{plugin}.yaml").write_text(f"id: {plugin}\nname: {plugin}\nincludes: [skill:review]\n")
+    config_path.write_text(yaml.safe_dump(config))
+    build_hub(hub)
+    catalog = Catalog(hub / "dist/mcp")
+
+    async def run() -> None:
+        async with Client(create_server(catalog)) as client:
+            first = await client.list_tools()
+            assert len(first.tools) == 50 and first.next_cursor is not None
+            second = await client.list_tools(cursor=first.next_cursor)
+            assert second.next_cursor is None
+            assert {tool.name for tool in first.tools + second.tools} == {
+                "search_assets",
+                "read_asset",
+                *catalog.skill_tools,
+            }
+            result = await client.call_tool(second.tools[-1].name, {})
+            assert not result.is_error and result.structured_content["plugin"] == "team-54"
 
     anyio.run(run)
 
