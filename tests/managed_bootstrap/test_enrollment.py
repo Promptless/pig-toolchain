@@ -606,7 +606,7 @@ def test_headless_linux_does_not_attempt_browser_launch(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(host_enrollment.webbrowser, "open", unexpected_browser_open)
 
-    assert not host_enrollment._open_hosted_enrollment_url("https://app.gopromptless.ai/instruction-hub/enroll")
+    assert not host_enrollment._open_hosted_enrollment_url("https://app.gopromptless.ai/pig/enroll")
     assert not host_enrollment._browser_session_available({"BROWSER": "xdg-open"}, "Linux")
 
 
@@ -995,7 +995,7 @@ def test_bootstrap_rejects_loopback_callback_with_wrong_state(tmp_path: Path) ->
 @pytest.mark.parametrize(
     ("pending_approval_url_override", "pending_approval_path"),
     [
-        ("https://attacker.example/instruction-hub/enroll", "/instruction-hub/enroll"),
+        ("https://attacker.example/pig/enroll", "/pig/enroll"),
         (None, "/attacker/enroll"),
     ],
     ids=["wrong-origin", "wrong-path"],
@@ -1042,7 +1042,7 @@ def test_bootstrap_fails_fast_when_browser_pending_callback_rejects_approval_url
     init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
-    server = _FakeWorkerServer(pending_approval_url_override="https://attacker.example/instruction-hub/enroll")
+    server = _FakeWorkerServer(pending_approval_url_override="https://attacker.example/pig/enroll")
     server.start()
     try:
         home = tmp_path / "home"
@@ -1083,7 +1083,7 @@ def test_bootstrap_requires_callback_deployment_instance_id(tmp_path: Path) -> N
         session_response={
             "session_id": "11111111-1111-4111-8111-111111111111",
             "device_code": "plihenroll_devicecode",
-            "poll_url": "https://api.gopromptless.ai/v1/instruction-hub/host-enrollments/sessions/11111111-1111-4111-8111-111111111111/poll",
+            "poll_url": "https://api.gopromptless.ai/v1/pig/host-enrollments/sessions/11111111-1111-4111-8111-111111111111/poll",
             "expires_at": (dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5)).isoformat(),
             "poll_interval_seconds": 1,
         }

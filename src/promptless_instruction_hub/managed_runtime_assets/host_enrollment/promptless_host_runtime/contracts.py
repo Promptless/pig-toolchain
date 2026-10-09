@@ -26,10 +26,10 @@ DEFAULT_WORKER_BASE_URL = "https://pig.promptless.ai"
 DEFAULT_DASHBOARD_BASE_URL = "https://app.gopromptless.ai"
 
 
-HOSTED_ENROLLMENT_START_PATH = "/instruction-hub/enroll/start"
+HOSTED_ENROLLMENT_START_PATH = "/pig/enroll/start"
 
 
-HOSTED_ENROLLMENT_APPROVAL_PATH = "/instruction-hub/enroll"
+HOSTED_ENROLLMENT_APPROVAL_PATH = "/pig/enroll"
 
 
 MANAGED_BEGIN = "# BEGIN PROMPTLESS MANAGED HOST ENROLLMENT"
