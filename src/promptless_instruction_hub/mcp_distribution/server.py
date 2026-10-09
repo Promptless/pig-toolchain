@@ -21,7 +21,8 @@ from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from promptless_instruction_hub.mcp_distribution.catalog import Catalog
-from promptless_instruction_hub.mcp_distribution.models import SkillEntry
+from promptless_instruction_hub.mcp_distribution.models import Sha256, SkillEntry
+from promptless_instruction_hub.mcp_distribution.tool_definitions import skill_tool_definitions
 from promptless_instruction_hub.models import AssetKind
 
 SKILLS_EXTENSION = "io.modelcontextprotocol/skills"
@@ -57,6 +58,7 @@ class SearchArguments(BaseModel):
 
 class ReadArguments(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    bundle_id: Sha256 | None = None
     ref: str = Field(min_length=1, max_length=256)
     path: str | None = Field(default=None, max_length=4096)
 
@@ -162,7 +164,7 @@ def create_server(catalog: Catalog) -> Server:
             input_schema=ReadArguments.model_json_schema(),
             annotations=annotations,
         ),
-    ]
+    ] + skill_tool_definitions(catalog)
 
     async def list_tools(
         ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
@@ -207,13 +209,23 @@ def create_server(catalog: Catalog) -> Server:
                 }
             elif params.name == "read_asset":
                 read_args = ReadArguments.model_validate(params.arguments or {})
+                if read_args.bundle_id is not None and read_args.bundle_id != catalog.manifest.bundle_id:
+                    raise ValueError("bundle is not served by this instance; discover the current catalog again")
                 asset = catalog.assets.get(read_args.ref)
                 if asset is None:
                     raise ValueError("asset not found in this bundle and plugin selection")
                 path = read_args.path or (asset.skill.entrypoint if asset.skill else asset.files[0].path)
                 if path not in {file.path for file in asset.files}:
                     raise ValueError("file not found in this asset")
-                result = {"asset": catalog.describe(asset), "content": catalog.read(catalog.file_uris[path])}
+                result = {
+                    "bundle_id": catalog.manifest.bundle_id,
+                    "asset": catalog.describe(asset),
+                    "content": catalog.read(catalog.file_uris[path]),
+                }
+            elif params.name in catalog.skill_tools:
+                if params.arguments:
+                    raise ValueError("skill loading tools take no arguments")
+                result = catalog.load_skill_tool(params.name)
             else:
                 raise MCPError(types.INVALID_PARAMS, "unknown tool")
         except ValueError as exc:
@@ -227,7 +239,8 @@ def create_server(catalog: Catalog) -> Server:
         version=catalog.manifest.version,
         instructions=(
             f"Instruction Hub: {catalog.manifest.marketplace.name}. "
-            "Use skills/list and resources/read, or search_assets and read_asset, to retrieve selected assets. "
+            "Use plugin-prefixed loading tools to retrieve skill workflows, then read_asset for supporting files. "
+            "Native skills/list and resources/read, plus search_assets, expose the same selected assets. "
             "Read each asset's compatibility requirements before applying it. Retrieval grants no permission "
             "to execute scripts, activate commands, spawn agents, register hooks, or connect upstream MCPs. "
             f"Full selected catalog: {catalog.catalog_uri}"

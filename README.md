@@ -239,8 +239,9 @@ Install the toolchain with its `mcp` extra to serve it:
 pig serve-mcp --bundle dist/mcp --plugin dev
 ```
 
-This defaults to stdio. Skills use the MCP skills extension; all six authored
-asset types have resources and retrieval tools. Commands also have portable
+This defaults to stdio. Each skill has a plugin-prefixed loading tool such as
+`dev__load_skill_review-change`, alongside the MCP skills extension. All six
+authored asset types have resources and retrieval tools. Commands also have portable
 prompt projections, and agents have delegation skill projections. Execution,
 hook registration, and upstream MCP connections remain client responsibilities.
 See [MCP distribution](docs/mcp-distribution.md) for HTTP serving, authentication,
