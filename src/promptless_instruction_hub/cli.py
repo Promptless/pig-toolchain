@@ -9,6 +9,10 @@ import sys
 from pathlib import Path
 
 from promptless_instruction_hub.agent_skills import AgentSkillWarning
+from promptless_instruction_hub.cloud_bundle import build_cloud_bundle
+from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
+    BootstrapError,
+)
 from promptless_instruction_hub.config import RELEASE_MANIFEST_PATH, write_hub_version
 from promptless_instruction_hub.compiler import build_hub, init_hub, validate_hub, verify_hub
 from promptless_instruction_hub.errors import InstructionHubError
@@ -26,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return _dispatch(args)
-    except (FileNotFoundError, InstructionHubError, ValueError) as exc:
+    except (FileNotFoundError, InstructionHubError, ValueError, BootstrapError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
@@ -34,6 +38,13 @@ def main(argv: list[str] | None = None) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pig", description="Promptless Instruction Hub")
     subcommands = parser.add_subparsers(dest="command", required=True)
+
+    cloud_parser = subcommands.add_parser("cloud-bundle", help="package headless Claude cloud capture hooks")
+    cloud_parser.add_argument("--worker-url", required=True)
+    cloud_parser.add_argument("--provider", required=True)
+    cloud_parser.add_argument("--integration-id", required=True)
+    cloud_parser.add_argument("--transport", choices=("proxy", "secret"), default="secret")
+    cloud_parser.add_argument("--output", type=Path, required=True)
 
     init_parser = subcommands.add_parser("init", help="initialize an empty Instruction Hub")
     _add_hub_arg(init_parser)
@@ -121,6 +132,17 @@ def _dispatch(args: argparse.Namespace) -> int:
             port=args.port,
             token=os.environ.get(args.token_env),
             allowed_hosts=args.allowed_host,
+        )
+        return 0
+    if args.command == "cloud-bundle":
+        print(
+            build_cloud_bundle(
+                args.output,
+                worker_url=args.worker_url,
+                provider=args.provider,
+                integration_id=args.integration_id,
+                transport=args.transport,
+            )
         )
         return 0
     if args.command == "init":

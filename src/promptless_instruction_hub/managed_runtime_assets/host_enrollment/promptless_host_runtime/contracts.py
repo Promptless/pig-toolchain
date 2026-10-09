@@ -319,12 +319,13 @@ class HostedEnrollmentRoutes:
 
 @dataclass(frozen=True)
 class HostCredential:
-    """Local per-host credential approved through the browser flow."""
+    """Credentials for browser-enrolled hosts or scoped cloud producers."""
 
     value: str
     credential_id: str | None
     deployment_instance_id: str | None
     is_internal_promptless_user: bool = False
+    producer_token: str | None = None
 
 
 @dataclass(frozen=True)

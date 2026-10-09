@@ -8,6 +8,9 @@ import re
 import socket
 import urllib.error
 import urllib.request
+from email.message import Message
+from http.client import HTTPResponse
+from typing import NoReturn
 
 from .contracts import (
     BootstrapAuthError,
@@ -31,11 +34,11 @@ def _worker_url(worker_base_url: str, path: str) -> str:
     return f"{worker_base_url}{path}"
 
 
-def _get_json(url: str, token: str | None, *, label: str) -> dict[str, JsonValue]:
-    headers = _auth_headers(token)
+def _get_json(url: str, token: str | None, *, label: str, producer_token: str | None = None) -> dict[str, JsonValue]:
+    headers = _auth_headers(token, producer_token)
     request = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+        with _open_worker_request(request, token, producer_token) as response:
             body = response.read()
     except urllib.error.HTTPError as exc:
         if exc.code in {401, 403}:
@@ -59,7 +62,9 @@ def _post_check_in(
     result: ConfigResult,
 ) -> None:
     payload = _check_in_payload(host, metadata, policy, result)
-    response_payload = _post_json_response(url, credential.value, payload, label="check-in response")
+    response_payload = _post_json_response(
+        url, credential.value, payload, label="check-in response", producer_token=credential.producer_token
+    )
     if response_payload.get("accepted") is not True:
         raise BootstrapError("check-in response was not accepted")
     response_policy_version = response_payload.get("policy_version")
@@ -73,16 +78,17 @@ def _post_json_response(
     payload: dict[str, JsonValue],
     *,
     label: str,
+    producer_token: str | None = None,
 ) -> dict[str, JsonValue]:
     body = json.dumps(payload, sort_keys=True).encode()
     request = urllib.request.Request(
         url,
         data=body,
-        headers={**_auth_headers(token), "Content-Type": "application/json"},
+        headers={**_auth_headers(token, producer_token), "Content-Type": "application/json"},
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+        with _open_worker_request(request, token, producer_token) as response:
             return _decode_json_object(response.read(), label)
     except urllib.error.HTTPError as exc:
         if exc.code in {401, 403}:
@@ -117,10 +123,34 @@ def _worker_response_error(error: urllib.error.HTTPError, label: str) -> WorkerR
     )
 
 
-def _auth_headers(token: str | None) -> dict[str, str]:
-    if token is None:
-        return {}
-    return {"Authorization": f"Bearer {token}"}
+class _RejectRedirect(urllib.request.HTTPRedirectHandler):
+    """Keep cloud credentials on the configured endpoint, including same-origin redirects."""
+
+    def redirect_request(
+        self, req: urllib.request.Request, fp: HTTPResponse, code: int, msg: str, headers: Message, newurl: str
+    ) -> NoReturn:
+        """Reject redirects before urllib constructs a request carrying credentials."""
+        # https://docs.python.org/3/library/urllib.request.html#urllib.request.HTTPRedirectHandler.redirect_request
+        fp.close()
+        raise BootstrapError("Cloud ingestion does not follow HTTP redirects")
+
+
+def _open_worker_request(
+    request: urllib.request.Request, token: str | None, producer_token: str | None
+) -> HTTPResponse:
+    # A redirect must not forward either cloud credential to another endpoint.
+    if producer_token is not None or (token is not None and token.startswith("plicg_")):
+        if request.type != "https":
+            raise BootstrapError("Cloud ingestion requires HTTPS")
+        return urllib.request.build_opener(_RejectRedirect()).open(request, timeout=HTTP_TIMEOUT_SECONDS)
+    return urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS)
+
+
+def _auth_headers(token: str | None, producer_token: str | None = None) -> dict[str, str]:
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    if producer_token is not None:
+        headers["X-Promptless-Producer-Token"] = producer_token
+    return headers
 
 
 def _check_in_payload(

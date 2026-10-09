@@ -775,6 +775,26 @@ Disabling it removes managed hooks from the new release; an older installed
 plugin keeps its hooks until refreshed. It does not delete previously ingested
 data or change a worker deployment.
 
+### Cloud agent trace capture
+
+Build a Claude cloud plugin with headless enrollment and native trace export:
+
+```bash
+pig cloud-bundle \
+  --worker-url https://pig.example.com \
+  --provider claude_tag \
+  --integration-id GRANT_ID \
+  --transport proxy \
+  --output pig-cloud-capture.zip
+```
+
+The archive contains public configuration and the collector. Configure the
+enrollment grant in the provider's connection proxy, or select `--transport secret`
+to supply it through a sandbox environment variable or secret file. The worker
+must support cloud enrollment and be reachable over HTTPS from the sandbox.
+See the [cloud agent ingestion guide](https://github.com/Promptless/promptless/blob/main/docs/pig/cloud-agent-ingestion.md)
+for credential setup, deployment requirements, and collection limits.
+
 ### Managed Host Runtime
 
 When `trace_ingestion.enabled` is true, the toolchain owns Promptless-managed runtime artifacts that are injected into

@@ -126,7 +126,7 @@ def render_managed_runtimes(
     if not config.trace_ingestion.enabled or plugin.id != PIG_PLUGIN_ID or target not in SUPPORTED_HOST_RUNTIME_TARGETS:
         return ()
 
-    _copy_runtime_bundle(target_root)
+    copy_host_runtime_bundle(target_root)
     _write_host_runtime_hooks(target_root, target)
     record = ManagedRuntimeRecord(
         id=HOST_RUNTIME_ID,
@@ -148,7 +148,8 @@ def render_managed_runtimes(
     return (record,)
 
 
-def _copy_runtime_bundle(target_root: Path) -> None:
+def copy_host_runtime_bundle(target_root: Path) -> None:
+    """Copy the standalone host collector into a plugin or cloud bundle."""
     runtime_root = target_root / HOST_RUNTIME_OUTPUT_DIR
     runtime_root.mkdir(parents=True, exist_ok=True)
 
