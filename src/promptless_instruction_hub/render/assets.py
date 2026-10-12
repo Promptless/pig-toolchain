@@ -13,6 +13,7 @@ from promptless_instruction_hub.fs import copy_tree
 from promptless_instruction_hub.models import Harness, LoadedAsset
 from promptless_instruction_hub.render.common import RenderedAssets, directory_for, manifest_key_for
 from promptless_instruction_hub.render.hooks import render_native_hooks
+from promptless_instruction_hub.skills import read_skill
 
 
 def render_assets_for_target(target_root: Path, target: Harness, assets: list[LoadedAsset]) -> RenderedAssets:
@@ -39,7 +40,10 @@ def render_assets_for_target(target_root: Path, target: Harness, assets: list[Lo
             rendered["rules"].append(asset.id)
             continue
         if support.mode in {"native", "verbatim"}:
-            _render_native_asset(target_root, asset)
+            if asset.type == "skill":
+                _render_agent_skill(target_root, target, asset, directory_name=asset.path.name)
+            else:
+                _render_native_asset(target_root, asset)
             rendered[manifest_key_for(asset.type)].append(asset.id)
             continue
         if support.mode == "projected":
@@ -48,45 +52,23 @@ def render_assets_for_target(target_root: Path, target: Harness, assets: list[Lo
     return {key: sorted(values) for key, values in rendered.items() if values}
 
 
-def _render_agent_skill(target_root: Path, target: Harness, asset: LoadedAsset) -> None:
-    destination = target_root / "skills" / asset.id
+def _render_agent_skill(
+    target_root: Path, target: Harness, asset: LoadedAsset, *, directory_name: str | None = None
+) -> None:
+    destination = target_root / "skills" / (directory_name or asset.id)
     if asset.type == "agent":
         destination.mkdir(parents=True, exist_ok=True)
         (destination / "SKILL.md").write_text(render_agent_skill(read_agent_skill(asset)), encoding="utf-8")
         return
+    skill = read_skill(asset)
     if asset.path.is_dir():
         copy_tree(asset.path, destination, skip_names={METADATA_FILE})
-        if target == "codex":
-            _normalize_codex_skill(destination, asset)
-        return
-    destination.mkdir(parents=True, exist_ok=True)
-    if target == "codex":
-        skill_path = destination / "SKILL.md"
-        skill_path.write_text(_codex_skill_contents(asset.path.read_text(), asset))
-        return
-    shutil.copy2(asset.path, destination / "SKILL.md")
-
-
-def _normalize_codex_skill(destination: Path, asset: LoadedAsset) -> None:
-    source_skill_path = _find_markdown_file(destination, "skill.md")
-    if source_skill_path.exists():
-        contents = source_skill_path.read_text()
-        if source_skill_path.name != "SKILL.md":
-            source_skill_path.unlink()
+        for child in destination.iterdir():
+            if child.is_file() and child.name.lower() == "skill.md":
+                child.unlink()
     else:
-        contents = _read_asset_markdown(asset)
-    (destination / "SKILL.md").write_text(_codex_skill_contents(contents, asset))
-
-
-def _codex_skill_contents(contents: str, asset: LoadedAsset) -> str:
-    if _has_yaml_frontmatter(contents):
-        return contents if contents.endswith("\n") else contents + "\n"
-    title = asset.metadata.title or asset.id
-    frontmatter = f"---\nname: {json.dumps(asset.id)}\ndescription: {json.dumps(title)}\n---"
-    body = contents.rstrip()
-    if not body:
-        return frontmatter + "\n"
-    return f"{frontmatter}\n\n{body}\n"
+        destination.mkdir(parents=True, exist_ok=True)
+    (destination / "SKILL.md").write_text(skill.contents, encoding="utf-8")
 
 
 def _has_yaml_frontmatter(contents: str) -> bool:
