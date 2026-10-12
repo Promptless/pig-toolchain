@@ -3,6 +3,9 @@ name: Publish Instruction Hub
 on:
   workflow_call:
     secrets:
+      external-plugin-credentials:
+        description: Repository-scoped read credentials for private external plugins (JSON).
+        required: false
       publisher-token:
         description: Optional token for source/release fetches and atomic publication; defaults to the caller's GITHUB_TOKEN.
         required: false
@@ -68,6 +71,7 @@ jobs:
         with:
           mode: publish
           hub-root: ${{ inputs.hub-root }}
+          external-plugin-credentials: ${{ secrets.external-plugin-credentials }}
           release-branch: ${{ inputs.release-branch }}
           source-branch: ${{ inputs.source-branch }}
           github-token: ${{ secrets.publisher-token || github.token }}

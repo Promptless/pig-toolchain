@@ -40,6 +40,10 @@ inputs:
     description: Commit a default-branch Cursor marketplace pointer that targets the release branch in publish mode.
     required: false
     default: "true"
+  external-plugin-credentials:
+    description: JSON map of HTTPS external repository URLs to read-only username/password credentials.
+    required: false
+    default: ""
   github-token:
     description: Token used only for publish-mode git pushes when checkout credentials are not persisted.
     required: false
@@ -72,6 +76,7 @@ runs:
       id: instruction-hub
       shell: bash
       env:
+        PIG_EXTERNAL_PLUGIN_CREDENTIALS: ${{ inputs.external-plugin-credentials }}
         INPUT_MODE: ${{ inputs.mode }}
         INPUT_HUB_ROOT: ${{ inputs.hub-root }}
         INPUT_RELEASE_BRANCH: ${{ inputs.release-branch }}
