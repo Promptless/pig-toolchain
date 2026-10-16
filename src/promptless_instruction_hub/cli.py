@@ -109,6 +109,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--allowed-host", action="append", help="additional allowed HTTP Host, optionally with :port or :*"
     )
 
+    preview_parser = subcommands.add_parser(
+        "compact-preview", help="preview conservative prose compaction without writing files"
+    )
+    preview_parser.add_argument("file", type=Path)
+
     return parser
 
 
@@ -117,6 +122,11 @@ def _add_hub_arg(parser: argparse.ArgumentParser) -> None:
 
 
 def _dispatch(args: argparse.Namespace) -> int:
+    if args.command == "compact-preview":
+        from promptless_instruction_hub.token_efficiency_preview import preview_file
+
+        print(preview_file(args.file), end="")
+        return 0
     if args.command == "serve-mcp":
         try:
             from promptless_instruction_hub.mcp_distribution.server import serve

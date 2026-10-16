@@ -22,6 +22,7 @@ import promptless_instruction_hub.render.gemini as gemini
 from promptless_instruction_hub.render.assets import render_assets_for_target
 from promptless_instruction_hub.render.common import RenderedAssets
 from promptless_instruction_hub.render.mcp import collect_mcp_servers, write_mcp_config
+from promptless_instruction_hub.render.token_efficiency import render_token_efficiency
 
 
 def render_target_plugins(
@@ -50,6 +51,7 @@ def render_target_plugins(
                 render_managed_skills(target_root, target, config, stable_plugin.definition)
             )
             managed_runtimes.extend(render_managed_runtimes(target_root, target, config, stable_plugin.definition))
+            render_token_efficiency(target_root, target, config, stable_plugin.definition)
             _write_manifest(target_root, target, config, stable_plugin.definition, rendered, mcp_servers)
     if "codex" in config.targets:
         codex.write_marketplace(output_root, config, plugins)

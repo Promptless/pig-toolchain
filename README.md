@@ -20,6 +20,10 @@ building, and publishing generated hub artifacts.
 
 ## Usage
 
+For optional concise-response hooks and experimental input compaction, see
+[token-efficient mode](docs/token-efficiency.md), including measured savings,
+research, supported hosts, and rollback instructions.
+
 Use the [GitHub workflows](#github-actions) or [GitLab template](#gitlab-ci) to
 keep toolchain setup in this repository. For custom GitHub jobs, see
 [direct action usage](#direct-action-usage).

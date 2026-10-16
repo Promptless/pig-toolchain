@@ -48,6 +48,15 @@
       "properties": {"enabled": {"type": "boolean", "default": false}},
       "default": {"enabled": false}
     },
+    "token_efficiency": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "concise_output": {"type": "boolean", "default": false},
+        "compact_instructions": {"type": "boolean", "default": false}
+      },
+      "default": {"concise_output": false, "compact_instructions": false}
+    },
     "trace_ingestion": {
       "type": "object",
       "additionalProperties": false,

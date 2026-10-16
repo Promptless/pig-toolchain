@@ -105,6 +105,15 @@ class McpDistributionConfig(BaseModel):
     enabled: bool = Field(default=False, strict=True)
 
 
+class TokenEfficiencyConfig(BaseModel):
+    """Independent, opt-in output guidance and conservative input compaction."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    concise_output: bool = Field(default=False, strict=True)
+    compact_instructions: bool = Field(default=False, strict=True)
+
+
 class HubConfig(BaseModel):
     """Root `hub.yaml` configuration."""
 
@@ -117,6 +126,7 @@ class HubConfig(BaseModel):
     targets: list[Harness] = Field(default_factory=lambda: list(SUPPORTED_HARNESSES), min_length=1)
     trace_ingestion: TraceIngestionConfig = Field(default_factory=TraceIngestionConfig)
     mcp: McpDistributionConfig = Field(default_factory=McpDistributionConfig)
+    token_efficiency: TokenEfficiencyConfig = Field(default_factory=TokenEfficiencyConfig)
 
     @field_validator("version")
     @classmethod
