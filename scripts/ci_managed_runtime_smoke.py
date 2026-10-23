@@ -110,17 +110,20 @@ def verify_runtime(plugin: Path, workspace: Path) -> None:
     env.update(CLAUDE_PLUGIN_ROOT=str(plugin), CURSOR_PLUGIN_ROOT=str(plugin))
     hooks = json.loads((plugin / "hooks/hooks.json").read_text())["hooks"]
     entry = hooks["stop"][0] if target == "cursor" else hooks["Stop"][0]["hooks"][0]
-    if target == "claude":
-        command = [entry["command"].replace("${CLAUDE_PLUGIN_ROOT}", str(plugin)), *entry["args"]]
-    elif os.name == "nt":
-        if target == "cursor":
-            command = [
-                os.environ["COMSPEC"],
-                "/d",
-                "/s",
-                "/c",
-                entry["command"].replace("${CURSOR_PLUGIN_ROOT}", str(plugin)),
-            ]
+    command: list[str] | str
+    if os.name == "nt":
+        if target == "claude":
+            assert entry["shell"] == "bash" and "args" not in entry
+            git = shutil.which("git")
+            assert git, "Git Bash is required by the generated Claude hook on Windows"
+            shell = Path(git).resolve().parent.parent / "bin/bash.exe"
+            assert shell.is_file(), shell
+            command = [str(shell), "--noprofile", "--norc", "-c", entry["command"]]
+        elif target == "cursor":
+            # cmd.exe does not understand the C-style quote escaping used by
+            # subprocess.list2cmdline. /s /c strips this outer pair of quotes.
+            hook = entry["command"].replace("${CURSOR_PLUGIN_ROOT}", str(plugin))
+            command = f'"{os.environ["COMSPEC"]}" /d /s /c "{hook}"'
         else:
             shell = shutil.which("pwsh") or shutil.which("powershell")
             assert shell, "PowerShell is needed to exercise Codex's Windows command form"

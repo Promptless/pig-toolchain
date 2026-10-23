@@ -250,11 +250,15 @@ def _native_hook_command(target: Harness, lifecycle: str, *, start: bool) -> dic
         if start
         else ["collect", "--host", target, "--lifecycle", lifecycle, "--detach", "--quiet"]
     )
-    if target == "claude":
-        # Claude exec form uses Node/Bun executable resolution on Windows, which
-        # appends .exe for this extensionless path. The sibling Unix script has a shebang.
-        return {"command": "${CLAUDE_PLUGIN_ROOT}/runtime/promptless-host-runtime", "args": arguments}
     command_args = " ".join(arguments)
+    if target == "claude":
+        # Claude has no per-platform command override. Its documented Bash shell
+        # form dispatches through the launcher on every OS (Git Bash on Windows).
+        # Direct exec would try to load that Unix script as a Windows executable.
+        return {
+            "command": f'"${{CLAUDE_PLUGIN_ROOT}}/runtime/promptless-host-runtime" {command_args}',
+            "shell": "bash",
+        }
     return {
         "command": f'"${{PLUGIN_ROOT}}/runtime/promptless-host-runtime" {command_args}',
         "commandWindows": f'& "${{PLUGIN_ROOT}}/runtime/promptless-host-runtime.exe" {command_args}',
@@ -267,8 +271,6 @@ def _host_runtime_start_hook_command(target: Harness, *, lifecycle: str) -> dict
 
 def _host_runtime_terminal_hook_command(target: Harness, *, lifecycle: str) -> dict[str, JsonValue]:
     if target == "claude":
-        # Claude has no per-platform command override. Keep exec form so Windows
-        # does not acquire a Git Bash dependency solely for stale-root recovery.
         return _native_hook_command(target, lifecycle, start=False)
     return {
         "command": _posix_native_terminal_hook_command(lifecycle),

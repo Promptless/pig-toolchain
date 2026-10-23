@@ -827,13 +827,14 @@ installed managed hooks do not require Python, Node, or Go. The toolchain compil
 and the adapter for user-authored portable hooks remain Python.
 
 The stable `runtime/promptless-host-runtime` shell launcher selects the native
-macOS or Linux executable. Windows exec-form hooks use
-`runtime/promptless-host-runtime.exe` (amd64, with Windows ARM64 emulation); the
-bundle also includes an explicit native ARM64 executable. Claude and Codex
+executable. Claude hooks explicitly use Bash, which requires Git Bash on Windows.
+Windows Codex and Cursor hooks invoke `runtime/promptless-host-runtime.exe`
+(amd64, with Windows ARM64 emulation); the bundle also includes an explicit
+native ARM64 executable. Claude and Codex
 SessionStart launch detached supervisors with closed output pipes. The Claude
 supervisor collects both Claude Code and detected Claude Desktop sources.
 Codex terminal hooks can fall back to a complete same-plugin sibling release
-when the recorded plugin root is stale. Unavailable terminal hooks exit quietly.
+when the recorded plugin root is stale, or exit quietly if no release is available.
 
 Cursor uses a shell/batch launcher and the Go `cursor-notify` command. The
 foreground accepts only bounded identity/path metadata, waits at most 200 ms

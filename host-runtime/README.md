@@ -34,8 +34,10 @@ mismatches, and unsafe ZIP paths. Existing source-addressed releases are verifie
 on rerun and never overwritten. Changing build flags or Go versions requires a
 new recipe string in `native_runtime.py`.
 
-macOS/Linux launchers select amd64 or arm64. Windows exec-form hooks resolve the
-root amd64 `.exe`, including on ARM64 through Windows emulation. An explicit
+macOS/Linux launchers select amd64 or arm64. Windows launchers invoke the
+root amd64 `.exe`, including on ARM64 through Windows emulation. Claude hooks
+use explicit Bash shell form, requiring Git Bash on Windows; Codex uses its
+PowerShell override and Cursor uses the batch launcher. An explicit
 `native/windows-arm64/promptless-host-runtime.exe` is also shipped. CI executes
 native tests and generated plugins on Linux, macOS, and Windows; cross-compiling
 ARM64 is not a substitute for execution on ARM64 Windows or Linux.
