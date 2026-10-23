@@ -16,6 +16,11 @@ from promptless_instruction_hub.hook_runtime import normalize_event
 from tests.config_helpers import enable_trace_ingestion
 
 
+@pytest.fixture(autouse=True)
+def isolate_retained_hooks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PROMPTLESS_HOOK_DATA_HOME", str(tmp_path / "hook-data"))
+
+
 def declaration(root: Path) -> Path:
     init_hub(root, org="Promptless")
     bundle = root / "assets/hooks/example"
@@ -116,7 +121,10 @@ def test_generated_launcher_executes_packaged_adapter_and_script(tmp_path: Path,
 def test_loaded_portable_hook_cannot_block_on_bundle_failure(
     tmp_path: Path, host: str, root_var: str, failure: str
 ) -> None:
-    declaration(tmp_path)
+    metadata = declaration(tmp_path)
+    if failure in {"exit-two", "exception"}:
+        source = "raise SystemExit(2)" if failure == "exit-two" else "raise RuntimeError('broken hook')"
+        (metadata.parent / "handler's $example.py").write_text(source)
     build_hub(tmp_path)
     plugin = tmp_path / "dist" / host / "pig"
     hooks = json.loads((plugin / "hooks/hooks.json").read_text())["hooks"]
@@ -132,9 +140,6 @@ def test_loaded_portable_hook_cannot_block_on_bundle_failure(
             "helper": "example/helper.py",
         }[failure]
         (plugin / "hooks" / relative).unlink()
-    else:
-        source = "raise SystemExit(2)" if failure == "exit-two" else "raise RuntimeError('broken hook')"
-        (plugin / "hooks/example/handler's $example.py").write_text(source)
     result = subprocess.run(
         ["/bin/sh", "-c", command],
         input=json.dumps(event(host)),

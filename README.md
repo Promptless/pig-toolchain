@@ -707,6 +707,38 @@ Scripts execute in the adapter's process, so cancellation signals reach their
 handlers directly. The adapter does not retry commands, start background workers, or infer recovery
 policy; those decisions belong to the hook script.
 
+### Portable hook lifetime
+
+Generated commands pin a SHA-256 manifest covering the adapter, hook declaration,
+and every file in the hook bundle. A generated SessionStart handler prepares a
+private, complete copy without executing authored code. The first ordinary hook
+invocation also prepares the copy if needed. Files are verified before an atomic
+directory rename makes the bundle available; concurrent preparations can share
+only a verified copy of the same digest.
+
+Retained bundles live under `$XDG_DATA_HOME/promptless/hook-runtime/v1`, defaulting
+to `~/.local/share/promptless/hook-runtime/v1`. Set `PROMPTLESS_HOOK_DATA_HOME` to
+override the base directory (the launcher appends `v1`). This store is independent
+of each host's disposable plugin cache. A loaded command keeps using its exact
+bundle after updates, rollback, or same-version replacement. It never follows a
+"latest" pointer or loads code from a sibling plugin version. Hook dependencies
+must be inside the authored bundle and located relative to `__file__`; the working
+directory and host plugin-root environment variables retain their host meanings.
+Use a separate writable location for hook state, not the retained code directory.
+
+The launcher validates retained files before execution. Missing, changed, or
+unexpected files skip the context hook with a nonblocking diagnostic, emitted
+once until the bundle becomes usable again. No hook input or output is persisted
+by the launcher. If the plugin disappears before either preparation or the first
+invocation, the hook skips rather than executing a different version.
+
+There is no automatic eviction: an idle or resumable session may still reference
+any retained digest. Remove retained bundles only after closing sessions that
+could use them, including sessions you intend to resume with old registrations.
+Safe automated cleanup requires host-provided lifetime/lease information; an
+age-only cleanup would recreate the update race. This retention applies to
+portable declarations, not authored native JSON or managed trace-runtime hooks.
+
 ### Native JSON escape hatch
 
 For other events, runtimes, or host features, keep `hooks.<target>.json` and shared
