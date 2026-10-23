@@ -169,6 +169,14 @@ jobs:
               assert context == "session_start", output
           PY
 
+      - name: Smoke test retained hook launcher on Python 3.9
+        env:
+          HOOK_TEST_PYTHON: ${{ steps.runtime-python.outputs.python-path }}
+          TOOLCHAIN_PYTHON: ${{ steps.toolchain-python.outputs.python-path }}
+        run: >-
+          uv run --frozen --python "$TOOLCHAIN_PYTHON"
+          pytest tests/instruction_hub/test_hook_bundles.py -q -k python_floor
+
   managed-runtime-windows:
     runs-on: windows-latest
     steps:

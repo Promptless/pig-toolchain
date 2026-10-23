@@ -9,7 +9,9 @@ from promptless_instruction_hub import hook_runtime
 from promptless_instruction_hub.assets import METADATA_FILE
 from promptless_instruction_hub.errors import InstructionHubError
 from promptless_instruction_hub.fs import JsonValue, copy_tree, read_json_mapping, write_json
-from promptless_instruction_hub.hook_definitions import RUNNER_NAME, render_hook_definition
+from promptless_instruction_hub.hook_bundles import write_bundle_manifest
+from promptless_instruction_hub.hook_definitions import render_hook_definition
+from promptless_instruction_hub.hook_launcher import RUNNER_NAME
 from promptless_instruction_hub.models import Harness, LoadedAsset
 
 
@@ -35,9 +37,11 @@ def render_native_hooks(target_root: Path, target: Harness, assets: list[LoadedA
             continue
         if asset.metadata.hook is not None:
             source = asset.path / METADATA_FILE
-            config = render_hook_definition(asset, target)
             hook_root.mkdir(parents=True, exist_ok=True)
             shutil.copy2(hook_runtime.__file__, hook_root / RUNNER_NAME)
+            copy_tree(asset.path, hook_root / asset.id, skip_names={METADATA_FILE})
+            digest = write_bundle_manifest(hook_root, asset, target)
+            config = render_hook_definition(asset, target, digest)
         else:
             source = _config_path(asset, target)
             config = _read_config(source)
@@ -58,6 +62,8 @@ def render_native_hooks(target_root: Path, target: Harness, assets: list[LoadedA
                 raise InstructionHubError(f"{source}: conflicting hook configuration field {key!r} for {target}")
             else:
                 merged[key] = value
+        if asset.metadata.hook is not None:
+            continue  # Already copied and hashed before rendering its command.
         if asset.path.is_dir():
             copy_tree(asset.path, hook_root / asset.id, skip_names={METADATA_FILE})
         else:

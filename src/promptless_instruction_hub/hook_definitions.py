@@ -11,7 +11,6 @@ from promptless_instruction_hub.fs import JsonValue
 from promptless_instruction_hub.hook_runtime import EVENTS
 from promptless_instruction_hub.models import Harness, LoadedAsset
 
-RUNNER_NAME = "_instruction_hub_hook.py"
 PLUGIN_ROOTS = {"claude": "CLAUDE_PLUGIN_ROOT", "codex": "PLUGIN_ROOT", "cursor": "CURSOR_PLUGIN_ROOT"}
 
 
@@ -44,19 +43,17 @@ def validate_hook_definition(asset: LoadedAsset) -> None:
             seen.add(key)
 
 
-def render_hook_definition(asset: LoadedAsset, target: Harness) -> dict[str, JsonValue]:
+def render_hook_definition(asset: LoadedAsset, target: Harness, digest: str) -> dict[str, JsonValue]:
     spec = asset.metadata.hook
     assert spec is not None
     root = PLUGIN_ROOTS[target]
-    runner = f'"${{{root}}}"/{shlex.quote("hooks/" + RUNNER_NAME)}'
-    entrypoint = f'"${{{root}}}"/{shlex.quote(f"hooks/{asset.id}/{spec.entrypoint}")}'
     launcher = shlex.quote(Path(hook_launcher.__file__).read_text(encoding="utf-8"))
-    command = (
-        "if command -v python3 >/dev/null 2>&1 "
-        "&& python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))'; then "
-        f"exec python3 -I -c {launcher} {runner} --host {target} --entrypoint {entrypoint}; "
-        "else printf '%s\\n' 'Instruction Hub hooks require Python 3.9 or newer.' >&2; fi"
+    invocation = f'exec python3 -I -c {launcher} "${{{root}}}/hooks" {shlex.quote(digest)}'
+    prefix = (
+        "if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))'; then "
     )
+    suffix = "; else printf '%s\\n' 'Instruction Hub hooks require Python 3.9 or newer.' >&2; fi"
+    command = prefix + invocation + suffix
     events: dict[str, JsonValue] = {}
     for binding in spec.bindings[target]:
         action: dict[str, JsonValue] = {"command": command, "timeout": spec.timeout}
@@ -72,4 +69,13 @@ def render_hook_definition(asset: LoadedAsset, target: Harness) -> dict[str, Jso
         handlers = events.setdefault(binding.event, [])
         assert isinstance(handlers, list)
         handlers.append(entry)
+    # Pin dependencies at session start, even for hooks that first run much
+    # later. Preparing only copies verified files; it never runs authored code.
+    startup = "sessionStart" if target == "cursor" else "SessionStart"
+    prepare: dict[str, JsonValue] = {"command": prefix + invocation + " --prepare" + suffix, "timeout": 5}
+    if target != "cursor":
+        prepare = {"hooks": [{"type": "command", **prepare}]}
+    startup_handlers = events.setdefault(startup, [])
+    assert isinstance(startup_handlers, list)
+    startup_handlers.insert(0, prepare)
     return {"version": 1, "hooks": events} if target == "cursor" else {"hooks": events}
