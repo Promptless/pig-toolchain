@@ -8,7 +8,6 @@ import json
 import os
 import ssl
 import subprocess
-import sys
 import threading
 import time
 import zipfile
@@ -24,26 +23,26 @@ import pytest
 from promptless_instruction_hub.cli import main as pig_main
 from promptless_instruction_hub.cloud_bundle import CLOUD_PLUGIN_VERSION, build_cloud_bundle
 from promptless_instruction_hub.managed_runtime import _runtime_bundle_sha256
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.cloud import (
+from tests.reference_runtime.cloud import (
     CloudConfig,
     _execution_scope,
     _grant_secret,
     _source_paths,
     collect_cloud,
 )
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
+from tests.reference_runtime.contracts import (
     BootstrapAuthError,
     BootstrapError,
     JsonValue,
     RUNTIME_VERSION,
 )
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.metadata import (
+from tests.reference_runtime.metadata import (
     _load_runtime_metadata,
 )
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.validation import (
+from tests.reference_runtime.validation import (
     _decode_json_object,
 )
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.worker import (
+from tests.reference_runtime.worker import (
     _get_json,
     _post_json_response,
 )
@@ -554,6 +553,9 @@ def test_generated_bundle_runs_without_installed_toolchain(
         assert not any(name.startswith("bin/") or "producer.json" in name or "__pycache__" in name for name in names)
         assert all(_GRANT.encode() not in archive.read(name) for name in names)
         archive.extractall(plugin_root)
+        for info in archive.infolist():
+            if info.external_attr >> 16 & 0o111:
+                (plugin_root / info.filename).chmod(0o755)
     metadata = _load_runtime_metadata(plugin_root, "claude")
     assert metadata.plugin_id == "pig-cloud-capture"
     assert metadata.plugin_version == CLOUD_PLUGIN_VERSION
@@ -563,13 +565,11 @@ def test_generated_bundle_runs_without_installed_toolchain(
     hooks = json.loads((plugin_root / "hooks/hooks.json").read_text())["hooks"]
     assert set(hooks) == {"SessionStart", "UserPromptSubmit", "Stop", "SubagentStop", "SessionEnd"}
     assert all(hook[0]["hooks"][0]["timeout"] == 3 for hook in hooks.values())
-    # -S removes installed packages; only the copied stdlib runtime can execute.
+    # The extracted Go runtime executes without an installed toolchain.
     event = tmp_path / "event.json"
     event.write_text(json.dumps(execution[1]))
     completed = subprocess.run(
         [
-            sys.executable,
-            "-S",
             str(plugin_root / "runtime/promptless-host-runtime"),
             "cloud-collect",
             "--config",
@@ -613,6 +613,9 @@ def test_generated_hook_detaches_and_records_revoked_auth(
     plugin_root = tmp_path / "plugin with spaces"
     with zipfile.ZipFile(output) as archive:
         archive.extractall(plugin_root)
+        for info in archive.infolist():
+            if info.external_attr >> 16 & 0o111:
+                (plugin_root / info.filename).chmod(0o755)
     hook = json.loads((plugin_root / "hooks/hooks.json").read_text())["hooks"]["Stop"][0]["hooks"][0]
     cloud_worker.revoked_path = "/v0/cloud-enrollment/leases"
     completed = subprocess.run(
@@ -635,7 +638,7 @@ def test_generated_hook_detaches_and_records_revoked_auth(
             break
         time.sleep(0.02)
     assert status["status"] == "partial"
-    assert status["error_type"] == "BootstrapAuthError"
+    assert status["error_type"] == "*runtime.HTTPError"
     assert not tuple(state_root.glob("hook-*.json"))
     assert len(cloud_worker.requests) == 1
     assert cloud_worker.requests[0].authorization == f"Bearer {_GRANT}"

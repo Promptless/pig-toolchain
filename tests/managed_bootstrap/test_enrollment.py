@@ -11,7 +11,7 @@ from tests.config_helpers import enable_trace_ingestion
 
 from promptless_instruction_hub.compiler import build_hub, init_hub
 from promptless_instruction_hub.fs import validate_json_value
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import (
+from tests.reference_runtime import (
     enrollment as host_enrollment,
 )
 
@@ -902,7 +902,7 @@ def test_bootstrap_configures_codex_and_claude_and_reports_metadata(tmp_path: Pa
         assert server.session_requests[0]["plugin_id"] == "pig"
         assert server.session_requests[0]["plugin_version"] == "0.1.0"
         assert server.session_requests[0]["package_id"] == "pig"
-        assert server.session_requests[0]["bootstrap_version"] == "0.3.0"
+        assert server.session_requests[0]["bootstrap_version"] == "0.4.0"
         assert server.session_requests[0]["toolchain_version"] != "unknown"
         assert server.session_requests[0]["pending_callback"] == "1"
         assert server.session_requests[1]["target"] == "claude"
@@ -925,7 +925,7 @@ def test_bootstrap_configures_codex_and_claude_and_reports_metadata(tmp_path: Pa
                 "policy_version",
                 "status",
             }
-            assert check_in["bootstrap_version"] == "0.3.0"
+            assert check_in["bootstrap_version"] == "0.4.0"
             assert check_in["plugin_version"] == "0.1.0"
             assert check_in["status"] == "configured"
             assert check_in["needs_restart"] is False

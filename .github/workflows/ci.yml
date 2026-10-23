@@ -64,6 +64,8 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    env:
+      PIG_NATIVE_RUNTIME_DIR: ${{ github.workspace }}/.native-runtime
     steps:
       - uses: actions/checkout@v6
 
@@ -80,6 +82,12 @@ jobs:
 
       - name: Sync dependencies
         run: uv sync --frozen
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.3"
+          cache-dependency-path: host-runtime/go.sum
+      - run: uv run python scripts/build_native_runtime.py --output .native-runtime --host
 
       - name: Run tests
         run: uv run pytest tests -q -n auto --dist worksteal
@@ -111,6 +119,8 @@ jobs:
 
   release-artifacts:
     runs-on: ubuntu-latest
+    env:
+      PIG_NATIVE_RUNTIME_DIR: ${{ github.workspace }}/.native-runtime
     steps:
       - uses: actions/checkout@v6
 
@@ -126,6 +136,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.3"
+          cache-dependency-path: host-runtime/go.sum
+      - run: uv run python scripts/build_native_runtime.py --output .native-runtime
+
       - name: Build source distribution and wheel from source distribution
         env:
           TOOLCHAIN_PYTHON: ${{ steps.toolchain-python.outputs.python-path }}
@@ -134,7 +150,7 @@ jobs:
           uv build --sdist --no-sources --python "$TOOLCHAIN_PYTHON" --out-dir dist
           uv build --wheel --no-sources --python "$TOOLCHAIN_PYTHON" --out-dir dist dist/*.tar.gz
 
-      - name: Set up managed-runtime Python floor
+      - name: Set up portable-hook Python floor
         id: runtime-python
         uses: actions/setup-python@v5
         with:
@@ -142,13 +158,11 @@ jobs:
 
       - name: Smoke test installed artifacts and generated runtime
         env:
-          RUNTIME_PYTHON: ${{ steps.runtime-python.outputs.python-path }}
           TOOLCHAIN_PYTHON: ${{ steps.toolchain-python.outputs.python-path }}
         run: >-
           "$TOOLCHAIN_PYTHON" scripts/ci_managed_runtime_smoke.py artifacts
           --dist dist
           --uv "$(command -v uv)"
-          --runtime-python "$RUNTIME_PYTHON"
 
       - name: Smoke test portable hook adapter on Python 3.9
         env:
@@ -169,35 +183,40 @@ jobs:
               assert context == "session_start", output
           PY
 
-  managed-runtime-windows:
-    runs-on: windows-latest
+  native-runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PIG_NATIVE_RUNTIME_DIR: ${{ github.workspace }}/.native-runtime
     steps:
       - uses: actions/checkout@v6
-
-      - name: Set up toolchain Python
-        id: toolchain-python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Set up managed-runtime Python floor
-        id: runtime-python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.9"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-
-      - name: Sync dependencies
-        run: uv sync --frozen --python "${{ steps.toolchain-python.outputs.python-path }}"
-
-      - name: Smoke test generated runtime and Windows state lock
-        run: >-
-          uv run --frozen --python "${{ steps.toolchain-python.outputs.python-path }}"
-          python scripts/ci_managed_runtime_smoke.py platform
-          --runtime-python "${{ steps.runtime-python.outputs.python-path }}"
-          --require-windows
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.3"
+          cache-dependency-path: host-runtime/go.sum
+      - run: uv sync --frozen
+      - name: Go tests and static checks
+        working-directory: host-runtime
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Go race checks and formatting
+        if: runner.os != 'Windows'
+        working-directory: host-runtime
+        shell: bash
+        run: |
+          go test -race ./...
+          test -z "$(gofmt -l .)"
+      - run: uv run python scripts/build_native_runtime.py --output .native-runtime --host
+      - name: Execute generated native plugins without interpreters on PATH
+        run: uv run python scripts/ci_managed_runtime_smoke.py platform

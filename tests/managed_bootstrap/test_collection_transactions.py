@@ -11,7 +11,7 @@ import pytest
 from tests.config_helpers import enable_trace_ingestion
 
 from promptless_instruction_hub.compiler import build_hub, init_hub
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
+from tests.reference_runtime.contracts import (
     CHUNK_TARGET_BYTES,
     CollectDeadlineExceeded,
     CollectionResult,
@@ -23,7 +23,7 @@ from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptles
     SourceEvent,
     SourceLedger,
 )
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.traces import (
+from tests.reference_runtime.traces import (
     _iter_source_events,
     _iter_upload_batches,
     _load_source_ledger,
@@ -151,8 +151,7 @@ def test_current_transcript_ack_is_persisted_before_idle_discovery(
             return (), True
 
         monkeypatch.setattr(
-            "promptless_instruction_hub.managed_runtime_assets.host_enrollment."
-            "promptless_host_runtime.traces._idle_root_scan_paths",
+            "tests.reference_runtime.traces._idle_root_scan_paths",
             observe_idle_discovery,
         )
 
@@ -203,8 +202,7 @@ def test_first_current_transcript_lock_timeout_reports_partial(tmp_path: Path, m
             yield False
 
         monkeypatch.setattr(
-            "promptless_instruction_hub.managed_runtime_assets.host_enrollment."
-            "promptless_host_runtime.traces._source_ledger_lock",
+            "tests.reference_runtime.traces._source_ledger_lock",
             time_out_upload_lock,
         )
 
@@ -239,8 +237,7 @@ def test_expired_deadline_stops_before_idle_source_iteration(tmp_path: Path, mon
         yield from original_iter_source_events(source_ledger, paths)
 
     monkeypatch.setattr(
-        "promptless_instruction_hub.managed_runtime_assets.host_enrollment."
-        "promptless_host_runtime.traces._iter_source_events",
+        "tests.reference_runtime.traces._iter_source_events",
         track_iterated_paths,
     )
     with pytest.raises(CollectDeadlineExceeded, match="native trace collection exceeded deadline"):
@@ -265,8 +262,7 @@ def test_idle_catch_up_checks_deadline_between_source_events(tmp_path: Path, mon
         idle_path.write_bytes(b'{"kind":"idle"}\n')
     monotonic_values = iter((1.0, 1.0, 3.0))
     monkeypatch.setattr(
-        "promptless_instruction_hub.managed_runtime_assets.host_enrollment."
-        "promptless_host_runtime.traces.time.monotonic",
+        "tests.reference_runtime.traces.time.monotonic",
         lambda: next(monotonic_values),
     )
 
@@ -303,14 +299,12 @@ def test_idle_catch_up_rechecks_deadline_before_upload(
         idle_path.write_bytes(b'{"kind":"idle"}\n')
     if max_chunks is not None:
         monkeypatch.setattr(
-            "promptless_instruction_hub.managed_runtime_assets.host_enrollment."
-            "promptless_host_runtime.traces.MAX_UPLOAD_CHUNKS_PER_BATCH",
+            "tests.reference_runtime.traces.MAX_UPLOAD_CHUNKS_PER_BATCH",
             max_chunks,
         )
     pending_values = iter(monotonic_values)
     monkeypatch.setattr(
-        "promptless_instruction_hub.managed_runtime_assets.host_enrollment."
-        "promptless_host_runtime.traces.time.monotonic",
+        "tests.reference_runtime.traces.time.monotonic",
         lambda: next(pending_values),
     )
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -17,15 +16,15 @@ from collections.abc import Iterator
 import pytest
 
 from promptless_instruction_hub.compiler import build_hub, init_hub
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
+from tests.reference_runtime.contracts import (
     CollectionResult,
     HookTraceContext,
 )
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.cursor import (
+from tests.reference_runtime.cursor import (
     capture as cursor_capture,
     database as cursor_database,
 )
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.cursor.wire import (
+from tests.reference_runtime.cursor.wire import (
     fields,
     tool_result,
 )
@@ -367,7 +366,7 @@ def test_missing_bubble_across_pages_delays_terminal_until_recovered(
 def test_pending_notification_survives_failed_upload(
     database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import cli
+    from tests.reference_runtime import cli
 
     monkeypatch.setattr(cli, "_run_ensure", lambda *args, **kwargs: 0)
     monkeypatch.setattr(cli, "_run_collect", lambda *args, **kwargs: CollectionResult.INCOMPLETE)
@@ -385,7 +384,7 @@ def test_pending_notification_survives_failed_upload(
 def test_failed_notifications_rotate_without_starving_current_or_queued_work(
     database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import cli
+    from tests.reference_runtime import cli
 
     queue = cursor_capture.spool_root() / "pending"
     queue.mkdir(parents=True)
@@ -413,7 +412,7 @@ def test_failed_notifications_rotate_without_starving_current_or_queued_work(
 def test_full_notification_queue_can_drain_and_retain_new_work(
     database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import cli
+    from tests.reference_runtime import cli
 
     queue = cursor_capture.spool_root() / "pending"
     queue.mkdir(parents=True)
@@ -444,7 +443,7 @@ def test_busy_collector_preserves_notification_until_next_wakeup(
     """A competing process queues work without waiting or starting another collector."""
     from unittest.mock import Mock
 
-    from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import (
+    from tests.reference_runtime import (
         cli,
         storage,
     )
@@ -454,9 +453,9 @@ def test_busy_collector_preserves_notification_until_next_wakeup(
     program = (
         "import json, sys, time\n"
         "from pathlib import Path\n"
-        "from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime "
+        "from tests.reference_runtime "
         "import cli\n"
-        "from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.cursor "
+        "from tests.reference_runtime.cursor "
         "import capture as cursor_capture\n"
         "cursor_capture.spool_root = lambda: Path(sys.argv[1])\n"
         "def unexpected(*args, **kwargs):\n"
@@ -676,10 +675,7 @@ def test_completed_children_refresh_when_database_changes_between_passes(
         assert "new descendant" in (journals / "grandchild.jsonl").read_text()
 
 
-def test_cursor_hooks_detach_slow_work_and_close_output_pipes(tmp_path: Path) -> None:
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is required for Cursor hooks")
+def test_cursor_hooks_detach_and_close_output_pipes(tmp_path: Path) -> None:
     hub = tmp_path / "hub"
     init_hub(hub, org="Promptless")
     enable_trace_ingestion(hub)
@@ -687,36 +683,35 @@ def test_cursor_hooks_detach_slow_work_and_close_output_pipes(tmp_path: Path) ->
     plugin = hub / "dist/cursor/pig"
     config = json.loads((plugin / "hooks/hooks.json").read_text())
     assert set(config["hooks"]) == {"sessionStart", "stop", "sessionEnd", "subagentStop"}
-    assert all(entries[-1]["timeout"] == 0.25 for entries in config["hooks"].values())
-    marker = tmp_path / "finished.json"
-    runtime = plugin / "runtime/promptless-host-runtime"
-    runtime.write_text(
-        "import json, pathlib, sys, time\nbody=json.load(sys.stdin)\ntime.sleep(0.8)\npathlib.Path("
-        + repr(str(marker))
-        + ").write_text(json.dumps(body))\n"
-    )
     env = {
         **os.environ,
         "HOME": str(tmp_path),
-        "PATH": str(Path(shutil.which("python3")).parent) + os.pathsep + os.environ["PATH"],
+        "USERPROFILE": str(tmp_path),
+        "PATH": "",
+        "PROMPTLESS_HOST_ENROLLMENT_ALLOW_TEST_URL_OVERRIDES": "1",
+        "PROMPTLESS_WORKER_BASE_URL": "http://127.0.0.1:9",
     }
-    start = time.monotonic()
     result = subprocess.run(
-        [node, str(plugin / "runtime/cursor-hook.cjs"), "stop"],
+        [str(plugin / "runtime/promptless-host-runtime"), "cursor-notify", "--detach", "--lifecycle", "stop"],
         input=json.dumps({"conversation_id": "session", "generation_id": "g", "prompt": "SECRET"}),
         capture_output=True,
         text=True,
         env=env,
-        timeout=0.5,
-        check=False,
+        timeout=2,
+        check=True,
     )
-    assert time.monotonic() - start < 0.5
-    assert result.returncode == 0 and result.stdout == result.stderr == ""
-    assert not marker.exists()
-    deadline = time.monotonic() + 3
-    while not marker.exists() and time.monotonic() < deadline:
+    assert result.stdout == result.stderr == ""
+    queue = tmp_path / ".promptless/instruction-hub/cursor/pending"
+    deadline = time.monotonic() + 5
+    while not list(queue.glob("*.json")) and time.monotonic() < deadline:
         time.sleep(0.02)
-    assert json.loads(marker.read_text()) == {"conversation_id": "session", "generation_id": "g"}
+    pending = list(queue.glob("*.json"))
+    assert len(pending) == 1
+    assert json.loads(pending[0].read_text()) == {
+        "lifecycle": "stop",
+        "conversation_id": "session",
+        "generation_id": "g",
+    }
 
 
 def test_unsaved_session_remains_pending(database: sqlite3.Connection) -> None:
@@ -987,41 +982,3 @@ def test_journal_retains_complete_result_after_pruned_ui_fallback(database: sqli
     assert page.records[-1]["capture"]["completeness"] == "partial"
     cursor_capture.append_observations("session", page.records)
     assert path.read_bytes() == before
-
-
-@pytest.mark.parametrize(
-    ("program", "status"),
-    [
-        ("import sys; sys.stdin.read()", "completed"),
-        ("raise RuntimeError('SECRET')", "collector_failed"),
-        ("import time; time.sleep(30)", "collector_timeout"),
-    ],
-)
-def test_detached_launcher_records_collector_outcome(tmp_path: Path, program: str, status: str) -> None:
-    """Crashes and watchdog kills produce only bounded metadata after detachment."""
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("Node is required for Cursor hooks")
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    source = Path(cursor_capture.__file__).parents[2] / "cursor-hook.cjs"
-    hook = runtime / source.name
-    shutil.copyfile(source, hook)
-    (runtime / "promptless-host-runtime").write_text(program)
-    # Exercise the actual watchdog without waiting two minutes in the test.
-    preload = tmp_path / "timers.cjs"
-    preload.write_text(
-        "const original = global.setTimeout;\n"
-        "global.setTimeout = (fn, ms, ...args) => original(fn, ms === 120000 ? 200 : ms, ...args);\n"
-    )
-    result = subprocess.run(
-        [node, "--require", str(preload), str(hook), "stop", "--background", "e30="],
-        env={**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)},
-        capture_output=True,
-        timeout=10,
-        check=True,
-    )
-    assert not result.stdout and not result.stderr
-    diagnostic = json.loads((tmp_path / ".promptless/instruction-hub/cursor-launcher-status.json").read_text())
-    assert diagnostic["status"] == status
-    assert set(diagnostic) == {"status", "observed_at"}

@@ -24,6 +24,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/promptless_instruction_hub"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"host-runtime" = "promptless_instruction_hub/host_runtime_source"
+
 [dependency-groups]
 dev = [
     "jsonschema>=4.0.0",

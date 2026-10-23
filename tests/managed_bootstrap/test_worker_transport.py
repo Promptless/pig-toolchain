@@ -7,14 +7,14 @@ from typing import NoReturn
 
 import pytest
 
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
+from tests.reference_runtime.contracts import (
     HTTP_TIMEOUT_SECONDS,
     BootstrapError,
 )
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.output import (
+from tests.reference_runtime.output import (
     _enrollment_user_message,
 )
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.worker import (
+from tests.reference_runtime.worker import (
     _get_json,
     _post_json_response,
 )

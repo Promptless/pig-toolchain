@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.storage import (
+from tests.reference_runtime.storage import (
     _ensure_windows_lock_byte,
 )
 
