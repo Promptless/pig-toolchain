@@ -12,18 +12,19 @@ collector. There are no per-tool hooks.
    the worker reports support.
 3. Set `trace_ingestion.enabled: true` in `hub.yaml`, build and publish the hub,
    then refresh the installed Cursor `pig` plugin.
-4. Add `cursor` to the installation's enabled hosts. Ensure Node and Python
-   3.9+ are available on Cursor's PATH, then complete host enrollment.
+4. Add `cursor` to the installation's enabled hosts. Complete host enrollment; the managed
+   runtime has no Python, Node, or Go installation prerequisite.
 
-The generated plugin includes managed runtime 0.3.0. An unenrolled collector can
+The generated plugin includes managed runtime 0.4.0. An unenrolled collector can
 open the enrollment page in the background. Worker or enrollment failure leaves
 Cursor usable and pending collection available for a subsequent lifecycle hook.
 
 ## What runs on the user's machine
 
-The foreground Node launcher reads bounded hook metadata and spawns a detached
-process with closed output pipes. Its Cursor timeout is 250 ms and its stalled
-stdin timer is 180 ms. Python discovery, enrollment, database access, journal
+The shell/batch launcher invokes a native Go executable. The foreground reads
+bounded identity/path metadata and spawns a detached process with closed output
+pipes. Stalled stdin is discarded after 200 ms. Startup hooks have a 30-second
+host timeout and terminal hooks 3 seconds. Enrollment, database access, journal
 writes, and network calls happen in the background.
 
 The background collector reads saved conversation data from Cursor's SQLite
@@ -57,22 +58,22 @@ protocol. Later saved results append revisions; acknowledged bytes never change.
 The worker uses the latest revision for analysis without counting another call.
 
 The same `cursor/` directory contains pending notifications, scan offsets, and
-`diagnostics.json`. Runtime failures use the existing host runtime diagnostics;
-missing Python is reported in
-`~/.promptless/instruction-hub/cursor-launcher-status.json`. These files contain
+`diagnostics.json`. Runtime failures use
+`~/.promptless/instruction-hub/last-bootstrap-status.json` and the bounded
+`host-runtime-diagnostics.jsonl` log. These files contain
 status metadata; journals contain sensitive trace content.
 
 To retry explicitly, invoke the installed runtime from its plugin directory:
 
 ```sh
-CURSOR_PLUGIN_ROOT="$PWD" python3 runtime/promptless-host-runtime collect --host cursor --include-active
+CURSOR_PLUGIN_ROOT="$PWD" runtime/promptless-host-runtime collect --host cursor --include-active
 ```
 
 On Windows PowerShell, run:
 
 ```powershell
 $env:CURSOR_PLUGIN_ROOT = (Get-Location).Path
-py -3 runtime/promptless-host-runtime collect --host cursor --include-active
+./runtime/promptless-host-runtime.exe collect --host cursor --include-active
 ```
 
 This command scans saved sessions
@@ -92,9 +93,10 @@ The adapter's saved field numbers were checked against Cursor desktop 3.19.19.
 Synthetic tests exercise the collector and worker contracts. Actual desktop
 dogfooding on macOS, Linux, and Windows remains a release requirement.
 
-Run `python3 scripts/benchmark_cursor_hook.py` to measure launcher overhead
-without accessing user traces or a worker. A 100-launch macOS arm64 sample with
-Node 26.5.0 measured p95 45.17 ms and p99 56.83 ms, within the proposed 50/100 ms
-targets. That benchmark excludes Cursor's own hook scheduling. Background work
-is bounded and runs at reduced priority where supported; it still consumes
-some CPU, disk, and network resources.
+After building local binaries, run
+`PIG_NATIVE_RUNTIME_DIR="$PWD/.native-runtime" uv run python scripts/benchmark_cursor_hook.py`
+to measure the native foreground hook using isolated state and a refused loopback
+connection. It does not access user traces or a production worker. The benchmark
+excludes Cursor's own hook scheduling. Background collection is bounded by its
+scan, upload, and pending-notification budgets; it still consumes CPU, disk, and
+network resources.

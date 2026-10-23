@@ -21,6 +21,7 @@ from promptless_instruction_hub.models import (
     ResolvedHubPluginDefinition,
     HubConfig,
 )
+from promptless_instruction_hub.native_manifest import PLATFORMS
 from promptless_instruction_hub.release.hashing import stable_hash
 from promptless_instruction_hub.release.manifests import build_release_version_basis
 from promptless_instruction_hub.render.plugins import render_target_plugins
@@ -498,8 +499,8 @@ def _validate_managed_runtimes(manifest_path: Path, runtimes: list[JsonValue], k
     for index, runtime_value in enumerate(runtimes):
         runtime = _require_mapping_value(manifest_path, runtime_value, f"{key_path}[{index}]")
         runtime_path = f"{key_path}[{index}]"
-        if set(runtime) != MANAGED_RUNTIME_KEYS:
-            expected = ", ".join(sorted(MANAGED_RUNTIME_KEYS))
+        if set(runtime) not in (MANAGED_RUNTIME_KEYS, MANAGED_RUNTIME_KEYS | {"source_sha256", "platforms"}):
+            expected = ", ".join(sorted(MANAGED_RUNTIME_KEYS)) + " (optionally with source_sha256 and platforms)"
             msg = f"{manifest_path}: {runtime_path} must contain exactly these keys: {expected}"
             raise ValueError(msg)
         runtime_id = runtime["id"]
@@ -513,7 +514,7 @@ def _validate_managed_runtimes(manifest_path: Path, runtimes: list[JsonValue], k
         if target not in {"claude", "codex", "cursor"}:
             msg = f"{manifest_path}: {runtime_path}.target must be claude, codex, or cursor"
             raise ValueError(msg)
-        for string_key in set(runtime) - {"id", "status", "target", "sha256"}:
+        for string_key in set(runtime) - {"id", "status", "target", "sha256", "platforms"}:
             value = runtime[string_key]
             if not isinstance(value, str) or not value:
                 msg = f"{manifest_path}: {runtime_path}.{string_key} must be a non-empty string"
@@ -523,6 +524,17 @@ def _validate_managed_runtimes(manifest_path: Path, runtimes: list[JsonValue], k
             _require_string(manifest_path, runtime, "sha256", display_path=f"{runtime_path}.sha256"),
             f"{runtime_path}.sha256",
         )
+        if "source_sha256" in runtime:
+            _validate_sha256(
+                manifest_path,
+                _require_string(manifest_path, runtime, "source_sha256", display_path=f"{runtime_path}.source_sha256"),
+                f"{runtime_path}.source_sha256",
+            )
+            platforms = _require_list(manifest_path, runtime, "platforms", display_path=f"{runtime_path}.platforms")
+            if not platforms or any(not isinstance(p, str) or p not in PLATFORMS for p in platforms):
+                raise ValueError(f"{manifest_path}: {runtime_path}.platforms must list supported native platforms")
+            if len({str(p) for p in platforms}) != len(platforms):
+                raise ValueError(f"{manifest_path}: {runtime_path}.platforms must not contain duplicates")
 
 
 def _require_mapping(

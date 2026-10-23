@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import BinaryIO
 
@@ -13,21 +11,19 @@ from tests.config_helpers import enable_trace_ingestion
 
 from promptless_instruction_hub.compiler import build_hub, init_hub
 from promptless_instruction_hub.fs import validate_json_value
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime import (
+from tests.reference_runtime import (
     cli as host_runtime_cli,
 )
 
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
+from tests.reference_runtime.contracts import (
     CollectionResult,
     Host,
 )
 
 from .helpers import (
-    BUNDLE_LOAD_ERROR,
     FIRST_SUCCESS_ACTIVE_FRAGMENT,
     FIRST_SUCCESS_SHOWN_KEY,
     HOST_RUNTIME_BIN,
-    HOST_RUNTIME_PACKAGE,
     INTERNAL_WELCOME_SHOWN_BY_VERSION_KEY,
     PENDING_FIRST_SUCCESS_KEY,
     _FakeWorkerServer,
@@ -94,7 +90,7 @@ def test_host_runtime_requires_subcommand_and_reports_version(tmp_path: Path) ->
         check=False,
     )
     assert missing_command.returncode == 2
-    assert "usage:" in missing_command.stderr
+    assert "expected command:" in missing_command.stderr
 
     for abbreviated_flag in ("--det", "--super"):
         abbreviated_collect = subprocess.run(
@@ -114,132 +110,25 @@ def test_host_runtime_requires_subcommand_and_reports_version(tmp_path: Path) ->
     )
     assert payload["id"] == "host-runtime"
     assert payload["name"] == HOST_RUNTIME_BIN
-    assert payload["version"] == "0.3.0"
+    assert payload["version"] == "0.4.0"
     assert payload["channel"] == "stable"
     manifest = json.loads((plugin_root / "hub.managed-runtimes.json").read_text())
     bundle_sha256 = _runtime_bundle_sha256(plugin_root / "runtime")
-    assert payload["sha256"] == manifest["managed_runtimes"][0]["sha256"] == bundle_sha256
+    assert manifest["managed_runtimes"][0]["sha256"] == bundle_sha256
+    native = json.loads((plugin_root / "runtime/native-manifest.json").read_text())
+    assert payload["sha256"] in native["files"].values()
 
     isolated = subprocess.run(
-        [sys.executable, "-S", str(runtime_path), "version", "--json"],
-        cwd=tmp_path,
-        env=_clean_env(
-            HOME=str(home),
-            PLUGIN_ROOT=str(plugin_root),
-            PYTHONPATH="",
-        ),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert isolated.returncode == 0
-    assert json.loads(isolated.stdout)["sha256"] == bundle_sha256
-    assert isolated.stderr == ""
-    assert list((plugin_root / "runtime" / HOST_RUNTIME_PACKAGE).rglob("__pycache__")) == []
-    assert list((plugin_root / "runtime" / HOST_RUNTIME_PACKAGE).rglob("*.pyc")) == []
-
-    text_version = subprocess.run(
-        [str(runtime_path), "version"],
-        env=_clean_env(HOME=str(home), PLUGIN_ROOT=str(plugin_root)),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert text_version.returncode == 0
-    assert text_version.stdout == f"{HOST_RUNTIME_BIN} 0.3.0\n"
-    assert text_version.stderr == ""
-
-    poison_root = tmp_path / "poison-pythonpath"
-    poison_package = poison_root / HOST_RUNTIME_PACKAGE
-    poison_marker = tmp_path / "poison-loaded"
-    poison_package.mkdir(parents=True)
-    (poison_package / "__init__.py").write_text("")
-    (poison_package / "cli.py").write_text(
-        "import os\n"
-        "from pathlib import Path\n"
-        "Path(os.environ['PROMPTLESS_POISON_MARKER']).write_text('loaded')\n"
-        "def main():\n"
-        "    return 99\n"
-    )
-    poisoned_pythonpath = subprocess.run(
         [str(runtime_path), "version", "--json"],
-        env=_clean_env(
-            HOME=str(home),
-            PLUGIN_ROOT=str(plugin_root),
-            PYTHONPATH=str(poison_root),
-            PROMPTLESS_POISON_MARKER=str(poison_marker),
-        ),
+        cwd=tmp_path,
+        env=_clean_env(HOME=str(home), PLUGIN_ROOT=str(plugin_root), PATH="", PYTHONPATH="/nonexistent"),
         text=True,
         capture_output=True,
-        check=False,
+        check=True,
     )
-    assert poisoned_pythonpath.returncode == 0
-    assert json.loads(poisoned_pythonpath.stdout)["version"] == "0.3.0"
-    assert poisoned_pythonpath.stderr == ""
-    assert not poison_marker.exists()
-
-    incomplete_bin = tmp_path / "incomplete-bin"
-    incomplete_bin.mkdir()
-    incomplete_runtime = incomplete_bin / HOST_RUNTIME_BIN
-    shutil.copy2(runtime_path, incomplete_runtime)
-    incomplete_bundle = subprocess.run(
-        [str(incomplete_runtime), "version"],
-        env=_clean_env(
-            HOME=str(home),
-            PLUGIN_ROOT=str(plugin_root),
-            PYTHONPATH=str(poison_root),
-            PROMPTLESS_POISON_MARKER=str(poison_marker),
-        ),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert incomplete_bundle.returncode == 1
-    assert incomplete_bundle.stdout == ""
-    assert incomplete_bundle.stderr == BUNDLE_LOAD_ERROR
-    assert not poison_marker.exists()
-
-    missing_module_bin = tmp_path / "missing-module-bin"
-    shutil.copytree(plugin_root / "runtime", missing_module_bin)
-    (missing_module_bin / HOST_RUNTIME_PACKAGE / "contracts.py").unlink()
-    missing_module = subprocess.run(
-        [str(missing_module_bin / HOST_RUNTIME_BIN), "version"],
-        env=_clean_env(
-            HOME=str(home),
-            PLUGIN_ROOT=str(plugin_root),
-            PYTHONPATH=str(poison_root),
-            PROMPTLESS_POISON_MARKER=str(poison_marker),
-        ),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert missing_module.returncode == 1
-    assert missing_module.stdout == ""
-    assert missing_module.stderr == BUNDLE_LOAD_ERROR
-    assert not poison_marker.exists()
-
-    internal_import_bin = tmp_path / "internal-import-bin"
-    shutil.copytree(plugin_root / "runtime", internal_import_bin)
-    internal_cli = internal_import_bin / HOST_RUNTIME_PACKAGE / "cli.py"
-    internal_cli.write_text(
-        internal_cli.read_text().replace(
-            "from __future__ import annotations\n",
-            "from __future__ import annotations\n\nraise ImportError('sentinel internal import')\n",
-            1,
-        )
-    )
-    internal_import = subprocess.run(
-        [str(internal_import_bin / HOST_RUNTIME_BIN), "version"],
-        env=_clean_env(HOME=str(home), PLUGIN_ROOT=str(plugin_root)),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert internal_import.returncode == 1
-    assert internal_import.stdout == ""
-    assert "ImportError: sentinel internal import" in internal_import.stderr
-    assert BUNDLE_LOAD_ERROR.strip() not in internal_import.stderr
+    assert json.loads(isolated.stdout)["sha256"] == payload["sha256"]
+    assert isolated.stderr == ""
+    assert not list((plugin_root / "runtime").rglob("*.py"))
 
 
 @pytest.mark.parametrize("execution_mode", ("detached", "supervised"))
