@@ -76,12 +76,16 @@ def test_generated_launcher_executes_packaged_adapter_and_script(tmp_path: Path,
     if host != "cursor":
         assert "SessionStart" in hooks["hooks"]  # Managed hooks coexist with the adapter.
     assert not (root / "dist/gemini/pig/hooks/_instruction_hub_hook.py").exists()
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    (caller / "json.py").write_text("raise RuntimeError('caller module must not shadow the hook runtime')")
     result = subprocess.run(
         ["/bin/sh", "-c", action["command"]],
         input=json.dumps(native_event),
         capture_output=True,
         text=True,
         check=True,
+        cwd=caller,
         env={**os.environ, root_var: str(plugin), "PYTHONDONTWRITEBYTECODE": "1"},
     )
     response = json.loads(result.stdout)

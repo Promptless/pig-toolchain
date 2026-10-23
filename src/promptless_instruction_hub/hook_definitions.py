@@ -54,7 +54,7 @@ def render_hook_definition(asset: LoadedAsset, target: Harness) -> dict[str, Jso
     command = (
         "if command -v python3 >/dev/null 2>&1 "
         "&& python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))'; then "
-        f"exec python3 -c {launcher} {runner} --host {target} --entrypoint {entrypoint}; "
+        f"exec python3 -I -c {launcher} {runner} --host {target} --entrypoint {entrypoint}; "
         "else printf '%s\\n' 'Instruction Hub hooks require Python 3.9 or newer.' >&2; fi"
     )
     events: dict[str, JsonValue] = {}
