@@ -10,9 +10,6 @@ from pathlib import Path
 
 from promptless_instruction_hub.agent_skills import AgentSkillWarning
 from promptless_instruction_hub.cloud_bundle import build_cloud_bundle
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
-    BootstrapError,
-)
 from promptless_instruction_hub.config import RELEASE_MANIFEST_PATH, write_hub_version
 from promptless_instruction_hub.compiler import build_hub, init_hub, validate_hub, verify_hub
 from promptless_instruction_hub.errors import InstructionHubError
@@ -30,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return _dispatch(args)
-    except (FileNotFoundError, InstructionHubError, ValueError, BootstrapError) as exc:
+    except (FileNotFoundError, InstructionHubError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

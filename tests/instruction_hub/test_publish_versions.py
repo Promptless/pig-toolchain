@@ -161,6 +161,9 @@ def test_publish_version_reports_nested_authoritative_version_basis_path(tmp_pat
             "managed_runtime_bad_sha",
             r"hub\.release\.json: version_basis\.managed_runtimes\[0\]\.sha256 must be a sha256 hex digest",
         ),
+        ("managed_runtime_bad_source", r"managed_runtimes\[0\]\.source_sha256 must be a sha256 hex digest"),
+        ("managed_runtime_bad_platform", r"managed_runtimes\[0\]\.platforms must list supported native platforms"),
+        ("managed_runtime_duplicate_platform", r"managed_runtimes\[0\]\.platforms must not contain duplicates"),
         ("release_id_empty", r"hub\.release\.json: release_id must not be empty"),
         ("release_hash_mismatch", r"hub\.release\.json: release_hash must match manifest content"),
     ],
@@ -188,6 +191,12 @@ def test_publish_version_rejects_authoritative_release_manifest_tampering(
         del manifest["version_basis"]["target_hashes"]["claude"]
     elif mutation == "managed_runtime_bad_sha":
         manifest["version_basis"]["managed_runtimes"][0]["sha256"] = "bad"
+    elif mutation == "managed_runtime_bad_source":
+        manifest["version_basis"]["managed_runtimes"][0]["source_sha256"] = "bad"
+    elif mutation == "managed_runtime_bad_platform":
+        manifest["version_basis"]["managed_runtimes"][0]["platforms"] = ["plan9-mips"]
+    elif mutation == "managed_runtime_duplicate_platform":
+        manifest["version_basis"]["managed_runtimes"][0]["platforms"] = ["linux-amd64", "linux-amd64"]
     elif mutation == "release_id_empty":
         manifest["release_id"] = ""
     elif mutation == "release_hash_mismatch":

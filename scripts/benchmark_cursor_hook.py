@@ -1,76 +1,64 @@
-"""Measure the real foreground launcher with an inert background runtime.
-
-Run with Python 3.9+ and Node on PATH. No enrollment, native database access,
-network, or user trace collection occurs. Desktop hook scheduling is excluded.
-"""
+#!/usr/bin/env python3
+"""Measure the native Cursor foreground hook with isolated state and no trace reads."""
 
 from __future__ import annotations
 
+import argparse
 import json
-import math
 import os
-from pathlib import Path
-import platform
-import shutil
+import statistics
 import subprocess
 import tempfile
 import time
 
+from promptless_instruction_hub.native_runtime import resolve_native_bundle
+
 
 def main() -> None:
-    node = shutil.which("node")
-    if node is None:
-        raise SystemExit("Node must be on PATH")
-    source = (
-        Path(__file__).resolve().parents[1]
-        / "src/promptless_instruction_hub/managed_runtime_assets/host_enrollment/cursor-hook.cjs"
-    )
-    with tempfile.TemporaryDirectory(prefix="cursor-hook-benchmark-") as name:
-        root = Path(name)
-        runtime = root / "runtime"
-        runtime.mkdir()
-        hook = runtime / "cursor-hook.cjs"
-        shutil.copyfile(source, hook)
-        (runtime / "promptless-host-runtime").write_text("import sys\nsys.stdin.read()\n")
-        env = {**os.environ, "HOME": str(root), "USERPROFILE": str(root)}
-        samples = []
-        for _ in range(100):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--samples", type=int, default=25)
+    args = parser.parse_args()
+    if args.samples < 1:
+        parser.error("samples must be positive")
+    bundle = resolve_native_bundle()
+    binary = bundle / ("promptless-host-runtime.exe" if os.name == "nt" else "promptless-host-runtime")
+    with tempfile.TemporaryDirectory(prefix="native-cursor-benchmark-") as directory:
+        env = {
+            **os.environ,
+            "HOME": directory,
+            "USERPROFILE": directory,
+            "PATH": "",
+            "PROMPTLESS_WORKER_BASE_URL": "http://127.0.0.1:1",
+            "PROMPTLESS_HOST_ENROLLMENT_ALLOW_TEST_URL_OVERRIDES": "1",
+            "PROMPTLESS_HOST_ENROLLMENT_OPEN_BROWSER": "0",
+        }
+        measurements = []
+        for _ in range(args.samples):
             start = time.perf_counter()
             result = subprocess.run(
-                [node, str(hook), "stop"],
-                input=b'{"conversation_id":"benchmark"}',
+                [binary, "cursor-notify", "--detach", "--lifecycle", "stop"],
+                input="{}",
+                text=True,
                 capture_output=True,
+                timeout=3,
                 env=env,
-                timeout=1,
-                check=True,
             )
-            samples.append((time.perf_counter() - start) * 1000)
-            assert not result.stdout and not result.stderr
-            time.sleep(0.05)
-        samples.sort()
-        blocked = subprocess.Popen(
-            [node, str(hook), "stop"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
-        )
-        start = time.perf_counter()
-        blocked.wait(timeout=1)
-        blocked_ms = (time.perf_counter() - start) * 1000
-        blocked.communicate()
+            assert result.returncode == 0 and not result.stdout and not result.stderr
+            measurements.append((time.perf_counter() - start) * 1000)
+        ordered = sorted(measurements)
         print(
             json.dumps(
                 {
-                    "platform": platform.platform(),
-                    "node": subprocess.check_output([node, "--version"], text=True).strip(),
-                    "samples": len(samples),
-                    "milliseconds": {
-                        **{f"p{p}": round(samples[math.ceil(len(samples) * p / 100) - 1], 2) for p in (50, 95, 99)},
-                        "max": round(max(samples), 2),
-                        "stdin_never_closed": round(blocked_ms, 2),
-                    },
+                    "samples": len(ordered),
+                    "median_ms": statistics.median(ordered),
+                    "p95_ms": ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))],
+                    "max_ms": max(ordered),
                 },
                 indent=2,
             )
         )
-        time.sleep(0.5)
+        # Allow refused-connection collectors to finish before deleting their isolated state.
+        time.sleep(1)
 
 
 if __name__ == "__main__":

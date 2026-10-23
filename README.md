@@ -821,36 +821,38 @@ for credential setup, deployment requirements, and collection limits.
 When `trace_ingestion.enabled` is true, the toolchain owns Promptless-managed runtime artifacts that are injected into
 the canonical `pig` plugin, including the host runtime used by Codex, Claude,
 and Cursor lifecycle hooks. Other generated plugins receive no toolchain-managed
-runtime or lifecycle hooks. During dogfood, generated Codex hooks wrap the bundled
-stdlib-only Python runtime with POSIX shell checks. The stable executable in
-`runtime/` delegates to private sibling modules that separate CLI dispatch,
-enrollment, trace collection, host configuration, persistence, and output.
-Generated Claude hooks use Claude Code's exec-form hook so Windows installs do
-not need a POSIX shell; Node must be available to start the inline launcher.
-Claude and Codex SessionStart launchers start a detached supervisor that inherits the
-hook input and redirects background output away from the agent transcript. The
-Claude supervisor collects both Claude Code and any detected Claude Desktop
-sources.
-Claude and Codex startup launchers emit schema-safe diagnostics when the host cannot resolve the
-plugin root, a readable managed runtime bundle (the launcher plus its sibling
-package and CLI entry module), or Python 3.9+. Terminal lifecycle launchers stay
-quiet: they resolve a complete runtime bundle under the plugin root, fall back
-to a complete sibling installed version with the same runtime-bundle layout for
-the same plugin id when the recorded root is stale or incomplete, and exit 0
-with no output when no usable bundle exists.
+runtime or lifecycle hooks. Managed runtime 0.4.0 is implemented in Go. Generated
+plugins contain executables for macOS, Linux, and Windows on amd64 and arm64;
+installed managed hooks do not require Python, Node, or Go. The toolchain compiler
+and the adapter for user-authored portable hooks remain Python.
 
-Cursor hooks use a bundled Node launcher with a 250 ms timeout. The foreground
-only accepts bounded identity/path metadata and launches a detached process.
-Interpreter discovery, enrollment, SQLite reads, journaling, and uploads happen
-in the background. Cursor receives no collector output.
+The stable `runtime/promptless-host-runtime` shell launcher selects the native
+macOS or Linux executable. Windows exec-form hooks use
+`runtime/promptless-host-runtime.exe` (amd64, with Windows ARM64 emulation); the
+bundle also includes an explicit native ARM64 executable. Claude and Codex
+SessionStart launch detached supervisors with closed output pipes. The Claude
+supervisor collects both Claude Code and detected Claude Desktop sources.
+Codex terminal hooks can fall back to a complete same-plugin sibling release
+when the recorded plugin root is stale. Unavailable terminal hooks exit quietly.
 
-```sh
-sh -c 'root=${PLUGIN_ROOT:-}; ...; find python3/python/py; run promptless-host-runtime session-start --host codex --detach'
-sh -c 'root=${PLUGIN_ROOT:-}; ...; find same-plugin sibling runtime if needed; run promptless-host-runtime collect --host codex --lifecycle stop --detach --quiet'
-sh -c 'root=${PLUGIN_ROOT:-}; ...; find same-plugin sibling runtime if needed; run promptless-host-runtime collect --host codex --lifecycle session_end --detach --quiet'
-node -e '... resolve ${CLAUDE_PLUGIN_ROOT}; find Python 3.9+; run promptless-host-runtime session-start --host claude --detach' '${CLAUDE_PLUGIN_ROOT}'
-node -e '... resolve ${CLAUDE_PLUGIN_ROOT}; find same-plugin sibling runtime if needed; run promptless-host-runtime collect --host claude --lifecycle session_end --detach --quiet' '${CLAUDE_PLUGIN_ROOT}'
-```
+Cursor uses a shell/batch launcher and the Go `cursor-notify` command. The
+foreground accepts only bounded identity/path metadata, waits at most 200 ms
+for stdin, and launches a detached collector. Enrollment, SQLite reads,
+journaling, and uploads run in the background. Startup hooks have a 30-second
+host timeout; terminal hooks have a 3-second timeout. These are host allowances,
+not expected foreground latency. Cursor receives no collector output.
+
+The compiler resolves immutable native release bundles by a hash of the Go
+sources, dependency lock, launchers, and pinned build recipe. It validates the
+complete platform inventory and every file digest before caching or copying a
+release. `hub.managed-runtimes.json` identifies the complete bundle; the runtime's
+`version --json` identifies the executing platform binary. The native release
+workflow must publish the source-matched bundle before this toolchain revision
+can build telemetry-enabled hubs without a local build override.
+
+For development, see [the native runtime guide](host-runtime/README.md). Existing
+enrollment state, credentials, Cursor journals, and upload ledgers retain their
+paths and formats across the migration.
 
 The dogfood host runtime uses `PROMPTLESS_WORKER_BASE_URL` or the default
 production worker. It reads the worker's public `/healthz` identity, opens the

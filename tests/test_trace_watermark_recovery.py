@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
+from tests.reference_runtime.contracts import (
     BootstrapError,
     SourceEvent,
     SourceLedger,
@@ -18,13 +18,13 @@ from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptles
     UploadBatch,
     WorkerResponseError,
 )
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.traces import (
+from tests.reference_runtime.traces import (
     _advance_ledger_from_response,
     _iter_source_events,
     _reconcile_source_sequence_conflict,
     _trace_source_sequence_conflict,
 )
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.worker import (
+from tests.reference_runtime.worker import (
     _MAX_WORKER_ERROR_RESPONSE_BYTES,
     _worker_response_error,
 )
