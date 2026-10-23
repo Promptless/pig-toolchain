@@ -780,10 +780,22 @@ The toolchain injects the harness-specific `update-instruction-hub`
 skill into the canonical `pig` plugin for Codex and Claude. Each generated copy
 is scoped to its hub's generated marketplace name, so customer-specific names,
 repository URLs, and checkout locations are not hardcoded. Each hub's generated
-PIG plugin receives its own scoped copy. Codex uses its marketplace upgrade and
-skill refresh host operations, stopping if those current-session actions are
-unavailable; Claude updates each installed plugin at its original scope and uses
-`/reload-plugins` to apply the changes without restarting.
+PIG plugin receives its own scoped copy. Both workflows compare installed
+versions before and after the update, then report current-session activation
+separately. Installed versions are not evidence of loaded hook registrations.
+
+Codex uses its marketplace upgrade and skill discovery refresh host operations.
+Skill discovery does not reload hooks or prove MCP activation. Without a supported
+current-session hook reload and its explicit result, activation remains pending
+restart; restart Codex and resume the conversation at a safe boundary. Claude
+updates each installed plugin at its original scope and uses `/reload-plugins`
+once. If the agent cannot submit that slash command, activation stays pending
+until the user runs it and confirms completion. Plugin monitors may still require
+a restart. Other running sessions have independent activation state.
+
+The first rollout of retained portable bundles requires a reload too: installing
+new files cannot replace commands already loaded in memory. Keep old caches and
+retained bundles intact; do not redirect old paths to new code to force activation.
 
 ### Trace ingestion
 
