@@ -698,9 +698,13 @@ its first workspace root. A missing working directory remains null.
 
 Emit `{"context": "Message for the agent"}` on stdout, or leave stdout empty to
 stay quiet. Use stderr for diagnostics. The adapter wraps context in the native
-response envelope and preserves a nonzero script exit. Scripts execute in the
-adapter's process, so cancellation signals reach their handlers directly. The
-adapter does not retry commands, start background workers, or infer recovery
+response envelope. Portable hooks supply context; they cannot veto a tool or
+turn. Their generated inline launcher reports failures on stderr and exits
+successfully, including when an update removes the adapter or helper files.
+Python's missing-script exit code 2 must not become an accidental host veto.
+Use native JSON hooks for intentional blocking or other host decision semantics.
+Scripts execute in the adapter's process, so cancellation signals reach their
+handlers directly. The adapter does not retry commands, start background workers, or infer recovery
 policy; those decisions belong to the hook script.
 
 ### Native JSON escape hatch

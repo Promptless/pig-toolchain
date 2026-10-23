@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -24,6 +25,16 @@ def bundle(root: Path, name: str, configs: dict[str, object]) -> Path:
 
 def config(event: str, command: str) -> dict[str, object]:
     return {"hooks": {event: [{"hooks": [{"type": "command", "command": command}]}]}}
+
+
+def test_native_hook_retains_intentional_blocking_exit(tmp_path: Path) -> None:
+    init_hub(tmp_path, org="Promptless")
+    bundle(tmp_path, "policy", {"hooks.json": config("PreToolUse", "exit 2")})
+    (tmp_path / "plugins/pig.yaml").write_text("id: pig\nname: PIG\nincludes: [hook:policy]\n")
+    build_hub(tmp_path)
+    hooks = json.loads((tmp_path / "dist/codex/pig/hooks/hooks.json").read_text())["hooks"]
+    command = hooks["PreToolUse"][0]["hooks"][0]["command"]
+    assert subprocess.run(["/bin/sh", "-c", command]).returncode == 2
 
 
 def test_native_bundles_select_merge_and_preserve_managed_hooks(tmp_path: Path) -> None:
