@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -75,12 +76,16 @@ def test_generated_launcher_executes_packaged_adapter_and_script(tmp_path: Path,
     if host != "cursor":
         assert "SessionStart" in hooks["hooks"]  # Managed hooks coexist with the adapter.
     assert not (root / "dist/gemini/pig/hooks/_instruction_hub_hook.py").exists()
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    (caller / "json.py").write_text("raise RuntimeError('caller module must not shadow the hook runtime')")
     result = subprocess.run(
         ["/bin/sh", "-c", action["command"]],
         input=json.dumps(native_event),
         capture_output=True,
         text=True,
         check=True,
+        cwd=caller,
         env={**os.environ, root_var: str(plugin), "PYTHONDONTWRITEBYTECODE": "1"},
     )
     response = json.loads(result.stdout)
@@ -102,6 +107,44 @@ def test_generated_launcher_executes_packaged_adapter_and_script(tmp_path: Path,
         env={root_var: str(plugin), "PATH": str(tmp_path / "missing-bin")},
     )
     assert result.returncode == 0 and "require Python 3.9" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "host,root_var", [("claude", "CLAUDE_PLUGIN_ROOT"), ("codex", "PLUGIN_ROOT"), ("cursor", "CURSOR_PLUGIN_ROOT")]
+)
+@pytest.mark.parametrize("failure", ["plugin", "adapter", "entrypoint", "helper", "exit-two", "exception"])
+def test_loaded_portable_hook_cannot_block_on_bundle_failure(
+    tmp_path: Path, host: str, root_var: str, failure: str
+) -> None:
+    declaration(tmp_path)
+    build_hub(tmp_path)
+    plugin = tmp_path / "dist" / host / "pig"
+    hooks = json.loads((plugin / "hooks/hooks.json").read_text())["hooks"]
+    entry = hooks[event(host)["hook_event_name"]][0]
+    command = (entry if host == "cursor" else entry["hooks"][0])["command"]
+    # The host already loaded this command before the updater removes files.
+    if failure == "plugin":
+        shutil.rmtree(plugin)
+    elif failure in {"adapter", "entrypoint", "helper"}:
+        relative = {
+            "adapter": "_instruction_hub_hook.py",
+            "entrypoint": "example/handler's $example.py",
+            "helper": "example/helper.py",
+        }[failure]
+        (plugin / "hooks" / relative).unlink()
+    else:
+        source = "raise SystemExit(2)" if failure == "exit-two" else "raise RuntimeError('broken hook')"
+        (plugin / "hooks/example/handler's $example.py").write_text(source)
+    result = subprocess.run(
+        ["/bin/sh", "-c", command],
+        input=json.dumps(event(host)),
+        capture_output=True,
+        text=True,
+        env={**os.environ, root_var: str(plugin)},
+    )
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert "Instruction Hub context hook skipped" in result.stderr
 
 
 @pytest.mark.parametrize(

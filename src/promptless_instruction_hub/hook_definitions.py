@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import shlex
+from pathlib import Path
 
+from promptless_instruction_hub import hook_launcher
 from promptless_instruction_hub.errors import InstructionHubError
 from promptless_instruction_hub.fs import JsonValue
 from promptless_instruction_hub.hook_runtime import EVENTS
@@ -48,10 +50,11 @@ def render_hook_definition(asset: LoadedAsset, target: Harness) -> dict[str, Jso
     root = PLUGIN_ROOTS[target]
     runner = f'"${{{root}}}"/{shlex.quote("hooks/" + RUNNER_NAME)}'
     entrypoint = f'"${{{root}}}"/{shlex.quote(f"hooks/{asset.id}/{spec.entrypoint}")}'
+    launcher = shlex.quote(Path(hook_launcher.__file__).read_text(encoding="utf-8"))
     command = (
         "if command -v python3 >/dev/null 2>&1 "
         "&& python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))'; then "
-        f"exec python3 {runner} --host {target} --entrypoint {entrypoint}; "
+        f"exec python3 -I -c {launcher} {runner} --host {target} --entrypoint {entrypoint}; "
         "else printf '%s\\n' 'Instruction Hub hooks require Python 3.9 or newer.' >&2; fi"
     )
     events: dict[str, JsonValue] = {}
