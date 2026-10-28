@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -40,10 +41,11 @@ func cursorDBPath() string {
 }
 
 type cursorSnapshot struct {
-	tx       *sql.Tx
-	ctx      context.Context
-	Deadline time.Time
-	Bytes    int64
+	tx            *sql.Tx
+	ctx           context.Context
+	Deadline      time.Time
+	Bytes         int64
+	readReference func(*cursorSnapshot, string) ([]byte, error)
 }
 
 func (s *cursorSnapshot) read(key string) ([]byte, error) {
@@ -88,7 +90,11 @@ func (s *cursorSnapshot) referencedBlob(reference []byte) ([]byte, error) {
 	if len(reference) == 0 || len(reference) > 64 {
 		return nil, nil
 	}
-	b, err := s.read("agentKv:blob:" + hex.EncodeToString(reference))
+	read := s.read
+	if s.readReference != nil {
+		read = func(key string) ([]byte, error) { return s.readReference(s, key) }
+	}
+	b, err := read("agentKv:blob:" + hex.EncodeToString(reference))
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +206,7 @@ func jsonValue(value any) any {
 		d := json.NewDecoder(strings.NewReader(s))
 		d.UseNumber()
 		var decoded any
-		if d.Decode(&decoded) == nil {
+		if d.Decode(&decoded) == nil && d.Decode(new(any)) == io.EOF {
 			return decoded
 		}
 	}
@@ -342,6 +348,10 @@ func canonicalTools(snapshot *cursorSnapshot, composer object, wanted map[string
 	return nil
 }
 func readCursorSession(id string, deadline time.Time, offset int, retry *int) (cursorPage, error) {
+	return readCursorSessionWithReferences(id, deadline, offset, retry, nil)
+}
+
+func readCursorSessionWithReferences(id string, deadline time.Time, offset int, retry *int, readReference func(*cursorSnapshot, string) ([]byte, error)) (cursorPage, error) {
 	page := cursorPage{Records: []object{}, Children: []string{}, Complete: true}
 	path := resolvePath(cursorDBPath())
 	slashPath := filepath.ToSlash(path)
@@ -372,7 +382,7 @@ func readCursorSession(id string, deadline time.Time, offset int, retry *int) (c
 		return page, err
 	}
 	defer tx.Rollback()
-	snapshot := &cursorSnapshot{tx: tx, ctx: ctx, Deadline: deadline}
+	snapshot := &cursorSnapshot{tx: tx, ctx: ctx, Deadline: deadline, readReference: readReference}
 	composer, err := snapshot.object("composerData:" + id)
 	if err != nil {
 		return page, err

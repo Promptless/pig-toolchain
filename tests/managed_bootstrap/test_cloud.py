@@ -12,7 +12,6 @@ import threading
 import time
 import zipfile
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -23,31 +22,9 @@ import pytest
 from promptless_instruction_hub.cli import main as pig_main
 from promptless_instruction_hub.cloud_bundle import CLOUD_PLUGIN_VERSION, build_cloud_bundle
 from promptless_instruction_hub.managed_runtime import _runtime_bundle_sha256
-from tests.reference_runtime.cloud import (
-    CloudConfig,
-    _execution_scope,
-    _grant_secret,
-    _source_paths,
-    collect_cloud,
-)
-from tests.reference_runtime.contracts import (
-    BootstrapAuthError,
-    BootstrapError,
-    JsonValue,
-    RUNTIME_VERSION,
-)
-from tests.reference_runtime.metadata import (
-    _load_runtime_metadata,
-)
-from tests.reference_runtime.validation import (
-    _decode_json_object,
-)
-from tests.reference_runtime.worker import (
-    _get_json,
-    _post_json_response,
-)
+from promptless_instruction_hub.fs import JsonValue, validate_json_value
 
-from .helpers import _policy_with, _signed_policy
+from .helpers import _signed_policy
 
 _GRANT = "plicg_" + "a" * 43
 
@@ -84,7 +61,9 @@ class _CloudWorker:
 
             def do_POST(self) -> None:
                 length = int(self.headers["Content-Length"])
-                self._handle(_decode_json_object(self.rfile.read(length), "test request"))
+                payload = validate_json_value(json.loads(self.rfile.read(length)), "test request")
+                assert isinstance(payload, dict)
+                self._handle(payload)
 
             def log_message(self, format: str, *args: object) -> None:
                 pass
@@ -270,261 +249,20 @@ def _write_config(path: Path, url: str, *, transport: str = "secret", target: st
 
 def _state_root(execution: tuple[Path, dict[str, JsonValue]]) -> Path:
     config_path, context = execution
-    return _execution_scope(CloudConfig.load(config_path), context)[0]
+    config = json.loads(config_path.read_text())
+    scope = [
+        config["worker_url"].rstrip("/"),
+        config["integration_id"],
+        config["provider"],
+        config["target"],
+        context["session_id"],
+    ]
+    digest = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
+    return Path.home() / ".promptless/cloud" / digest
 
 
 def _upload_requests(worker: _CloudWorker) -> list[_Request]:
     return [request for request in worker.requests if request.path.startswith("/v0/traces/batches")]
-
-
-@pytest.mark.parametrize("target", ["claude", "codex"])
-def test_newer_required_runtime_blocks_capture_without_uploading(
-    execution: tuple[Path, dict[str, JsonValue]], cloud_worker: _CloudWorker, target: str
-) -> None:
-    _write_config(execution[0], cloud_worker.url, target=target)
-    cloud_worker.policy = _policy_with(required_bootstrap_version="999.0.0")
-
-    status = collect_cloud(*execution, drain_seconds=0)
-
-    assert status == {
-        "status": "blocked",
-        "reason": "bootstrap_upgrade_required",
-        "execution_id": "root-session",
-        "uploaded_batches": 0,
-    }
-    root = _state_root(execution)
-    assert json.loads((root / "status.json").read_text()) == status
-    assert not _upload_requests(cloud_worker)
-    assert not list(root.glob("ledger.*.json"))
-
-
-@pytest.mark.parametrize("required_version", [None, "0.0.1", RUNTIME_VERSION])
-def test_compatible_runtime_policy_allows_capture(
-    execution: tuple[Path, dict[str, JsonValue]], cloud_worker: _CloudWorker, required_version: str | None
-) -> None:
-    cloud_worker.policy = _policy_with(required_bootstrap_version=required_version)
-
-    status = collect_cloud(*execution, drain_seconds=0)
-
-    assert status["status"] == "drained"
-    assert status["uploaded_batches"] == 1
-    assert len(_upload_requests(cloud_worker)) == 1
-    assert json.loads((_state_root(execution) / "status.json").read_text()) == status
-
-
-def test_scoped_discovery_does_not_sweep_neighbors_or_symlinked_children(tmp_path: Path) -> None:
-    main = (tmp_path / "session.jsonl").resolve()
-    main.write_text("{}\n")
-    neighbor = main.with_name("another-session.jsonl")
-    neighbor.write_text("{}\n")
-    children = main.with_suffix("") / "subagents"
-    children.mkdir(parents=True)
-    child = children / "agent-child.jsonl"
-    child.write_text("{}\n")
-    (children / "agent-link.jsonl").symlink_to(neighbor)
-    (children / "unrelated.jsonl").write_text("{}\n")
-    nested = children / "nested"
-    nested.mkdir()
-    (nested / "agent-hidden.jsonl").write_text("{}\n")
-
-    assert _source_paths(main, "claude") == (main, child)
-    assert _source_paths(main, "codex") == (main,)
-    other_main = main.with_name("other.jsonl")
-    other_main.write_text("{}\n")
-    other_main.with_suffix("").mkdir()
-    (other_main.with_suffix("") / "subagents").symlink_to(children, target_is_directory=True)
-    assert _source_paths(other_main, "claude") == (other_main,)
-
-
-def test_lost_enrollment_response_reuses_private_producer(
-    execution: tuple[Path, dict[str, JsonValue]], cloud_worker: _CloudWorker
-) -> None:
-    cloud_worker.drop_lease_response = True
-    with pytest.raises(OSError):
-        collect_cloud(*execution, drain_seconds=0)
-    root = _state_root(execution)
-    before = json.loads((root / "producer.json").read_text())
-    assert set(before) == {"producer_token", "transcript_path"}
-    assert (root / "producer.json").stat().st_mode & 0o777 == 0o600
-    assert root.stat().st_mode & 0o777 == 0o700
-    assert collect_cloud(*execution, drain_seconds=0)["status"] == "drained"
-    requests = [request for request in cloud_worker.requests if request.path.endswith("/leases")]
-    assert len(cloud_worker.leases) == 1
-    assert requests[0].producer == requests[1].producer == before["producer_token"]
-    assert requests[0].payload == requests[1].payload
-    assert _GRANT not in (root / "producer.json").read_text()
-    assert before["producer_token"] not in (root / "status.json").read_text()
-
-
-def test_renewal_preserves_acknowledged_ranges_and_only_uploads_new_records(
-    execution: tuple[Path, dict[str, JsonValue]], cloud_worker: _CloudWorker
-) -> None:
-    first = collect_cloud(*execution, drain_seconds=0)
-    root = _state_root(execution)
-    state_before = (root / "producer.json").read_bytes()
-    ledger_paths = list(root.glob("ledger.*.json"))
-    assert len(ledger_paths) == 1
-    assert first["uploaded_batches"] == 1
-    assert collect_cloud(*execution, drain_seconds=0)["uploaded_batches"] == 0
-    transcript = Path(str(execution[1]["transcript_path"]))
-    original_size = transcript.stat().st_size
-    with transcript.open("ab") as handle:
-        handle.write(b'{"type":"assistant","sessionId":"root-session","message":{"content":"done"}}\n')
-    assert collect_cloud(*execution, drain_seconds=0)["uploaded_batches"] == 1
-    assert (root / "producer.json").read_bytes() == state_before
-    assert list(root.glob("ledger.*.json")) == ledger_paths
-    requests = _upload_requests(cloud_worker)
-    assert len(requests) == 2
-    second_chunks = requests[1].payload["chunks"]
-    assert isinstance(second_chunks, list) and isinstance(second_chunks[0], dict)
-    assert second_chunks[0]["start_offset"] == original_size
-    assert len({request.producer for request in cloud_worker.requests}) == 1
-
-
-@pytest.mark.parametrize("failure", ["lost_response", "invalid_ack"])
-def test_failed_ack_does_not_advance_ledger(
-    execution: tuple[Path, dict[str, JsonValue]], cloud_worker: _CloudWorker, failure: str
-) -> None:
-    cloud_worker.drop_upload_response = failure == "lost_response"
-    cloud_worker.reject_ack = failure == "invalid_ack"
-    with pytest.raises((OSError, BootstrapError)):
-        collect_cloud(*execution, drain_seconds=0)
-    assert not list(_state_root(execution).glob("ledger.*.json"))
-    cloud_worker.reject_ack = False
-    assert collect_cloud(*execution, drain_seconds=0)["uploaded_batches"] == 1
-    requests = _upload_requests(cloud_worker)
-    assert len(requests) == 2
-    assert requests[0].payload["batch_id"] == requests[1].payload["batch_id"]
-    assert requests[0].payload["chunks"] == requests[1].payload["chunks"]
-    assert len(cloud_worker.batches) == 1
-    assert collect_cloud(*execution, drain_seconds=0)["uploaded_batches"] == 0
-
-
-def test_concurrent_hooks_upload_each_range_once(
-    execution: tuple[Path, dict[str, JsonValue]], cloud_worker: _CloudWorker
-) -> None:
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(collect_cloud, *execution, drain_seconds=0) for _ in range(2)]
-        outcomes = [future.result(timeout=15) for future in futures]
-    assert sorted(outcome["uploaded_batches"] for outcome in outcomes) == [0, 1]
-    assert len(_upload_requests(cloud_worker)) == 1
-    assert len(cloud_worker.leases) == 1
-
-
-@pytest.mark.parametrize("path", ["/v0/cloud-enrollment/leases", "/v0/host-enrollment/policy", "/v0/traces/batches"])
-def test_revoked_auth_stops_collection_without_advancing_ledger(
-    execution: tuple[Path, dict[str, JsonValue]], cloud_worker: _CloudWorker, path: str
-) -> None:
-    cloud_worker.revoked_path = path
-    with pytest.raises(BootstrapAuthError):
-        collect_cloud(*execution, drain_seconds=0)
-    root = _state_root(execution)
-    assert not list(root.glob("ledger.*.json"))
-    status = json.loads((root / "status.json").read_text())
-    assert status["status"] == "partial"
-    assert status["error_type"] == "BootstrapAuthError"
-    assert _GRANT not in json.dumps(status)
-
-
-@pytest.mark.parametrize("transport", ["proxy", "secret"])
-def test_transport_sends_independent_producer_header(
-    execution: tuple[Path, dict[str, JsonValue]],
-    cloud_worker: _CloudWorker,
-    monkeypatch: pytest.MonkeyPatch,
-    transport: str,
-) -> None:
-    _write_config(execution[0], cloud_worker.url, transport=transport)
-    if transport == "proxy":
-        monkeypatch.delenv("PROMPTLESS_CLOUD_GRANT")
-    collect_cloud(*execution, drain_seconds=0)
-    assert len(cloud_worker.requests) == 3
-    for request in cloud_worker.requests:
-        assert request.authorization == (f"Bearer {_GRANT}" if transport == "secret" else None)
-        assert request.producer is not None and request.producer.startswith("plicl_")
-
-
-def test_proxy_rejects_sandbox_grants_and_secret_mode_requires_exactly_one(
-    execution: tuple[Path, dict[str, JsonValue]],
-    cloud_worker: _CloudWorker,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _write_config(execution[0], cloud_worker.url, transport="proxy")
-    with pytest.raises(BootstrapError, match="not in the sandbox"):
-        _grant_secret(CloudConfig.load(execution[0]))
-    _write_config(execution[0], cloud_worker.url)
-    secret_file = tmp_path / "grant-secret"
-    secret_file.write_text(_GRANT + "\n")
-    monkeypatch.setenv("PROMPTLESS_CLOUD_GRANT_FILE", str(secret_file))
-    with pytest.raises(BootstrapError, match="exactly one"):
-        _grant_secret(CloudConfig.load(execution[0]))
-    monkeypatch.delenv("PROMPTLESS_CLOUD_GRANT")
-    assert _grant_secret(CloudConfig.load(execution[0])) == _GRANT
-    monkeypatch.delenv("PROMPTLESS_CLOUD_GRANT_FILE")
-    with pytest.raises(BootstrapError, match="exactly one"):
-        _grant_secret(CloudConfig.load(execution[0]))
-
-
-@pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
-@pytest.mark.parametrize("method", ["GET", "POST"])
-def test_https_redirect_never_forwards_cloud_credentials(cloud_worker: _CloudWorker, code: int, method: str) -> None:
-    cloud_worker.redirect_code = code
-    cloud_worker.redirect_url = cloud_worker.url.replace("127.0.0.1", "localhost") + "/credential-sink"
-    # A changed hostname is a different origin, even with the same local TLS endpoint.
-    with pytest.raises(BootstrapError, match="does not follow HTTP redirects"):
-        if method == "GET":
-            _get_json(cloud_worker.url + "/redirect", _GRANT, label="redirect", producer_token="producer")
-        else:
-            _post_json_response(cloud_worker.url + "/redirect", _GRANT, {}, label="redirect", producer_token="producer")
-    assert len(cloud_worker.requests) == 1
-    assert cloud_worker.requests[0].path == "/redirect"
-
-
-def test_cloud_transport_rejects_cleartext_before_request() -> None:
-    with pytest.raises(BootstrapError, match="requires HTTPS"):
-        _post_json_response("http://127.0.0.1:1/", _GRANT, {}, label="unsafe", producer_token="producer")
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "http://example.test",
-        "https://user:password@example.test",
-        "https://example.test/path",
-        "https://example.test?token=secret",
-        "https://example.test#fragment",
-    ],
-)
-def test_cloud_config_rejects_unsafe_origin(tmp_path: Path, url: str) -> None:
-    path = tmp_path / "config.json"
-    _write_config(path, url)
-    with pytest.raises(BootstrapError, match="HTTPS origin"):
-        CloudConfig.load(path)
-
-
-@pytest.mark.parametrize(
-    "field,value",
-    [("execution_id", "other"), ("target", "codex"), ("provider", "other"), ("expires_at", "2000-01-01T00:00:00Z")],
-)
-def test_rejects_wrong_or_expired_lease_scope(
-    execution: tuple[Path, dict[str, JsonValue]], cloud_worker: _CloudWorker, field: str, value: str
-) -> None:
-    cloud_worker.lease_overrides[field] = value
-    with pytest.raises(BootstrapError):
-        collect_cloud(*execution, drain_seconds=0)
-    assert len(cloud_worker.requests) == 1
-
-
-def test_rejects_changed_identity_on_renewal(
-    execution: tuple[Path, dict[str, JsonValue]], cloud_worker: _CloudWorker
-) -> None:
-    collect_cloud(*execution, drain_seconds=0)
-    before = (_state_root(execution) / "producer.json").read_bytes()
-    cloud_worker.lease_overrides["host_instance_id"] = "different-host"
-    with pytest.raises(BootstrapError, match="identity changed"):
-        collect_cloud(*execution, drain_seconds=0)
-    assert (_state_root(execution) / "producer.json").read_bytes() == before
-    assert len(_upload_requests(cloud_worker)) == 1
 
 
 def test_generated_bundle_runs_without_installed_toolchain(
@@ -556,12 +294,11 @@ def test_generated_bundle_runs_without_installed_toolchain(
         for info in archive.infolist():
             if info.external_attr >> 16 & 0o111:
                 (plugin_root / info.filename).chmod(0o755)
-    metadata = _load_runtime_metadata(plugin_root, "claude")
-    assert metadata.plugin_id == "pig-cloud-capture"
-    assert metadata.plugin_version == CLOUD_PLUGIN_VERSION
-    assert metadata.toolchain_version != "unknown"
     manifest = json.loads((plugin_root / "hub.managed-runtimes.json").read_text())["managed_runtimes"][0]
     assert manifest["sha256"] == _runtime_bundle_sha256(plugin_root / "runtime")
+    assert manifest["plugin_id"] == "pig-cloud-capture"
+    assert manifest["plugin_version"] == CLOUD_PLUGIN_VERSION
+    assert manifest["toolchain_version"] != "unknown"
     hooks = json.loads((plugin_root / "hooks/hooks.json").read_text())["hooks"]
     assert set(hooks) == {"SessionStart", "UserPromptSubmit", "Stop", "SubagentStop", "SessionEnd"}
     assert all(hook[0]["hooks"][0]["timeout"] == 3 for hook in hooks.values())
@@ -634,7 +371,7 @@ def test_generated_hook_detaches_and_records_revoked_auth(
     while time.monotonic() < deadline:
         status_path = state_root / "status.json"
         status = json.loads(status_path.read_text()) if status_path.exists() else {}
-        if status.get("error_type") == "BootstrapAuthError" and not tuple(state_root.glob("hook-*.json")):
+        if status.get("error_type") == "*runtime.HTTPError" and not tuple(state_root.glob("hook-*.json")):
             break
         time.sleep(0.02)
     assert status["status"] == "partial"

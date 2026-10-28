@@ -293,6 +293,10 @@ func stringList(v any) []string {
 	return result
 }
 func prepareCursorJournals(context HookContext, lifecycle string) (HookContext, bool, error) {
+	return prepareCursorJournalsWithReader(context, lifecycle, readCursorSession)
+}
+
+func prepareCursorJournalsWithReader(context HookContext, lifecycle string, readSession func(string, time.Time, int, *int) (cursorPage, error)) (HookContext, bool, error) {
 	lock, err := acquireLock(filepath.Join(cursorSpool(), "export.lock"), time.Time{}, false)
 	if err != nil {
 		return context, false, err
@@ -403,7 +407,7 @@ func prepareCursorJournals(context HookContext, lifecycle string) (HookContext, 
 			v := int(n)
 			retryOffset = &v
 		}
-		page, readErr := readCursorSession(task.ID, minTime(deadline, time.Now().Add(500*time.Millisecond)), int(number(offsets[task.Owner][task.ID])), retryOffset)
+		page, readErr := readSession(task.ID, minTime(deadline, time.Now().Add(500*time.Millisecond)), int(number(offsets[task.Owner][task.ID])), retryOffset)
 		saveOffset := readErr == nil
 		if readErr != nil {
 			errorCounts["decode_or_budget"]++

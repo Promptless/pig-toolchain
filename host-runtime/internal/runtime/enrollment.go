@@ -362,10 +362,13 @@ func sessionFromCallback(c EnrollmentContext, p url.Values) (*EnrollmentSession,
 	}
 	return s, nil
 }
-func openBrowser(endpoint string) (bool, error) {
+func browserSessionAvailable(goos string) bool {
 	setting := os.Getenv("PROMPTLESS_HOST_ENROLLMENT_OPEN_BROWSER")
-	available := setting == "1" || (setting != "0" && (runtime.GOOS != "linux" || os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != "" || os.Getenv("MIR_SOCKET") != "" || os.Getenv("WSL_INTEROP") != ""))
-	if !available {
+	return setting == "1" || (setting != "0" && (goos != "linux" || os.Getenv("DISPLAY") != "" || os.Getenv("WAYLAND_DISPLAY") != "" || os.Getenv("MIR_SOCKET") != "" || os.Getenv("WSL_INTEROP") != ""))
+}
+
+func openBrowser(endpoint string) (bool, error) {
+	if !browserSessionAvailable(runtime.GOOS) {
 		u, _ := url.Parse(endpoint)
 		if testURLs() && loopback(u) {
 			client := http.Client{Timeout: 10 * time.Second}

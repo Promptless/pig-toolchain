@@ -67,9 +67,24 @@ journals, and exact upload acknowledgment/range proofs. Acknowledged offsets
 advance only after a worker response proves the captured bytes. Desktop hooks
 fail open; background failures leave bounded, redacted diagnostics.
 
-Go tests directly cover these low-level contracts. Python integration tests run
-the generated native executable against mock workers, including enrollment,
-collection, Cursor journals, and cloud capture. `tests/reference_runtime` holds
-the frozen Python implementation for migration-reference unit tests only; those
-tests do not count as native runtime coverage. Real-host desktop dogfooding and
-worker deployment acceptance remain separate from local and CI checks.
+Go owns runtime unit and behavior tests in `internal/runtime/*_test.go`:
+
+- `host_config_test.go` covers symlinked desktop stores, deduplication, cycles,
+  source filters, and deadlines.
+- `traces_test.go` and `runtime_test.go` cover persisted compatibility, chunking,
+  acknowledgments, conflict proofs, retries, deadlines, and cross-process locks.
+- `cursor_*_test.go` uses real SQLite WAL fixtures for result decoding, reference
+  failures, pagination, subagents, journal revisions and limits. Notification tests
+  control settling delays while exercising the real durable queue and locks.
+- `cloud_test.go` and `worker_test.go` exercise HTTP/TLS contracts, leases,
+  credential isolation, retries, redirects, response limits, and timeout messages.
+- `cli_test.go` covers completion exits, detached input, failure diagnostics,
+  local notices, and headless enrollment. `hook_install_test.go` covers persistent
+  launcher installation.
+
+Python retains compiler tests and integrations that execute generated native
+binaries against mock workers, including enrollment, collection, Cursor journals,
+cloud bundles, and hook subprocesses. These tests do not import a second runtime
+implementation. Python-specific mocking and interpreter-launch tests were replaced
+with native process, file-lock, and protocol assertions. Real-host desktop
+acceptance and worker deployment acceptance remain separate from local and CI checks.

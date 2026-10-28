@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -86,6 +87,21 @@ func sameOrigin(a, b *url.URL) bool {
 	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
 }
 
+func workerRequestError(endpoint *url.URL, err error) error {
+	var timeout net.Error
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		label := "worker response"
+		switch endpoint.Path {
+		case "/v0/host-enrollment/policy":
+			label = "policy response"
+		case "/v0/host-enrollment/check-ins":
+			label = "check-in response"
+		}
+		return fmt.Errorf("Promptless worker did not respond within 10 seconds while waiting for the %s. Retry shortly; if it persists, check the worker's health and workload: %w", label, err)
+	}
+	return fmt.Errorf("worker request failed: %w", err)
+}
+
 func requestJSON(method, endpoint string, credential *Credential, body any) (object, error) {
 	u, err := validateURL(endpoint, true)
 	if err != nil {
@@ -132,16 +148,20 @@ func requestJSON(method, endpoint string, credential *Credential, body any) (obj
 	}}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("worker request failed: %w", err)
+		return nil, workerRequestError(u, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 65536))
+		b, readErr := io.ReadAll(io.LimitReader(resp.Body, 65536+1))
+		if readErr != nil || len(b) > 65536 {
+			// A partial error document cannot supply a valid watermark proof.
+			b = nil
+		}
 		return nil, &HTTPError{resp.StatusCode, b}
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20+1))
 	if err != nil {
-		return nil, err
+		return nil, workerRequestError(u, err)
 	}
 	if len(b) > 16<<20 {
 		return nil, errors.New("worker response exceeds size limit")

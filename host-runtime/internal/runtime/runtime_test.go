@@ -21,6 +21,14 @@ func privateHome(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	for _, key := range []string{"PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "CURSOR_PLUGIN_ROOT", "PROMPTLESS_CURSOR_DATABASE"} {
+		t.Setenv(key, "")
+	}
 	t.Setenv("PROMPTLESS_HOST_RUNTIME_LEDGER", filepath.Join(home, "ledger.json"))
 	return home
 }
@@ -273,7 +281,7 @@ func TestConflictRequiresCapturedInteriorRecordProof(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "trace.jsonl")
 	mustWrite(t, path, []byte("one\ntwo\n"))
-	for _, scenario := range []string{"valid", "wrong_digest", "partial_record", "full_range", "wrong_source", "wrong_start", "changed_prefix"} {
+	for _, scenario := range []string{"valid", "wrong_digest", "partial_record", "full_range", "wrong_source", "wrong_start", "changed_prefix", "missing_proof", "malformed_proof", "zero_watermark"} {
 		t.Run(scenario, func(t *testing.T) {
 			ledger, err := loadLedger(filepath.Join(root, scenario+".json"))
 			if err != nil {
@@ -287,6 +295,14 @@ func TestConflictRequiresCapturedInteriorRecordProof(t *testing.T) {
 			detail := object{"code": "trace_source_sequence_conflict", "source": "codex", "source_path_hash": event.PathHash,
 				"requested_start_offset": 0, "requested_end_offset": 8, "acknowledged_offset": 4, "acknowledged_range": proof}
 			switch scenario {
+			case "missing_proof":
+				delete(detail, "acknowledged_range")
+			case "malformed_proof":
+				detail["acknowledged_range"] = "not a range"
+			case "zero_watermark":
+				detail["acknowledged_offset"] = 0
+				proof["end_offset"] = 0
+				proof["content_sha256"] = hash(nil)
 			case "wrong_digest":
 				proof["content_sha256"] = hash([]byte("bad\n"))
 			case "partial_record":

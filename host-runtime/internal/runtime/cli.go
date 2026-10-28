@@ -152,6 +152,19 @@ func spawnDetached(args []string, input []byte) error {
 	return cmd.Process.Release()
 }
 
+func detachedCommand(args []string) []string {
+	child := []string{args[0]}
+	for _, arg := range args[1:] {
+		if arg != "--detach" {
+			child = append(child, arg)
+		}
+	}
+	if args[0] != "cursor-notify" {
+		child = append(child, "--supervised")
+	}
+	return child
+}
+
 // Main keeps stdout restricted to one host control object or command response.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	name, o, err := parseCommand(args, stderr)
@@ -204,15 +217,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		if err == nil {
 			if o.Detach {
-				child := []string{name}
-				for i := 1; i < len(args); i++ {
-					if args[i] != "--detach" {
-						child = append(child, args[i])
-					}
-				}
-				if name != "cursor-notify" {
-					child = append(child, "--supervised")
-				}
+				child := detachedCommand(args)
 				if name == "collect" && o.IfSources && !hasSources(h) {
 					out.emit(object{"status": "trace_upload_skipped", "reason": "no_sources", "host": h}, o.Quiet)
 				} else {

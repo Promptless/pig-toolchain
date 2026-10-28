@@ -2,9 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -173,45 +171,52 @@ func ensureConfig(h Host, endpoint, ledger string) (ConfigResult, error) {
 }
 func scanSources(h Host, deadline time.Time, active bool) ([]string, bool) {
 	paths := []string{}
-	complete := true
-	for _, root := range nativeRoots(h) {
-		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-			if !deadline.IsZero() && !time.Now().Before(deadline) {
-				return errDeadline
+	seenDirs, seenFiles := map[string]bool{}, map[string]bool{}
+	var walk func(string) error
+	walk = func(path string) error {
+		if err := checkDeadline(deadline); err != nil {
+			return err
+		}
+		// Desktop users may relocate transcript stores using symlinks. Resolve
+		// directories before descending so aliases and cycles are visited once.
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil
+		}
+		resolved := resolvePath(path)
+		if info.IsDir() {
+			if seenDirs[resolved] {
+				return nil
 			}
+			seenDirs[resolved] = true
+			entries, err := os.ReadDir(resolved)
 			if err != nil {
 				return nil
 			}
-			if entry.IsDir() {
-				return nil
-			}
-			if entry.Type()&os.ModeSymlink != 0 {
-				return nil
-			}
-			if h == ClaudeDesktop {
-				if entry.Name() != "audit.jsonl" {
-					return nil
+			for _, entry := range entries {
+				if err := walk(filepath.Join(resolved, entry.Name())); err != nil {
+					return err
 				}
-			} else if filepath.Ext(path) != ".jsonl" {
-				return nil
 			}
-			info, err := entry.Info()
-			if err != nil || !info.Mode().IsRegular() {
-				return nil
-			}
-			if !active && time.Since(info.ModTime()) < 12*time.Hour {
-				return nil
-			}
-			paths = append(paths, resolvePath(path))
 			return nil
-		})
-		if errors.Is(err, errDeadline) {
-			complete = false
-			break
+		}
+		if !info.Mode().IsRegular() || seenFiles[resolved] || filepath.Ext(path) != ".jsonl" || (h == ClaudeDesktop && filepath.Base(path) != "audit.jsonl") {
+			return nil
+		}
+		if active || time.Since(info.ModTime()) >= 12*time.Hour {
+			paths = append(paths, resolved)
+			seenFiles[resolved] = true
+		}
+		return nil
+	}
+	for _, root := range nativeRoots(h) {
+		if err := walk(root); err != nil {
+			sort.Strings(paths)
+			return paths, false
 		}
 	}
 	sort.Strings(paths)
-	return paths, complete
+	return paths, true
 }
 func hasSources(h Host) bool {
 	if h == Cursor {

@@ -9,6 +9,25 @@ import (
 )
 
 func cursorNotify(event object, lifecycle string, out *output) error {
+	notifier := cursorNotifier{
+		ensure: func() error { return ensure(Cursor, true, false, false, out) },
+		collect: func(item object) (bool, error) {
+			return collect(Cursor, str(item["lifecycle"]), hookContext(item), true, true, out)
+		},
+		sleep: time.Sleep,
+	}
+	return notifier.run(event, lifecycle)
+}
+
+// The queue owns persistence and scheduling; enrollment and collection retain
+// their independent I/O and retry contracts.
+type cursorNotifier struct {
+	ensure  func() error
+	collect func(object) (bool, error)
+	sleep   func(time.Duration)
+}
+
+func (n cursorNotifier) run(event object, lifecycle string) error {
 	root := cursorSpool()
 	queue := filepath.Join(root, "pending")
 	if err := os.MkdirAll(queue, 0700); err != nil {
@@ -39,12 +58,12 @@ func cursorNotify(event object, lifecycle string, out *output) error {
 		return nil
 	}
 	defer lock.close()
-	if err = ensure(Cursor, true, false, false, out); err != nil {
+	if err = n.ensure(); err != nil {
 		return err
 	}
 	deadline := time.Now().Add(time.Minute)
 	for _, delay := range []time.Duration{200 * time.Millisecond, 2 * time.Second, 5 * time.Second} {
-		time.Sleep(delay)
+		n.sleep(delay)
 		entries, _ = filepath.Glob(filepath.Join(queue, "*.json"))
 		sort.Slice(entries, func(i, j int) bool {
 			if entries[i] == path {
@@ -79,7 +98,7 @@ func cursorNotify(event object, lifecycle string, out *output) error {
 			if !validLifecycle(ev) {
 				continue
 			}
-			complete, err := collect(Cursor, ev, hookContext(item), true, true, out)
+			complete, err := n.collect(item)
 			if err != nil {
 				return err
 			}

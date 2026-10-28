@@ -11,16 +11,14 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 
 from promptless_instruction_hub.fs import JsonValue, validate_json_value
-from tests.reference_runtime.contracts import Host
-from tests.reference_runtime.storage import (
-    _scoped_ledger_path,
-)
+
+Host = Literal["codex", "claude", "claude-desktop", "cursor"]
 
 HOST_RUNTIME_BIN = "promptless-host-runtime"
 HOST_RUNTIME_PACKAGE = "promptless_host_runtime"
@@ -56,13 +54,15 @@ def _scoped_ledger_path_for_test(
     deployment_instance_id: str = "worker-local-1",
 ) -> Path:
     state = json.loads(_host_state_path(home).read_text())
-    return _scoped_ledger_path(
-        base_path,
-        worker_base_url=worker_base_url,
-        deployment_instance_id=deployment_instance_id,
-        host_instance_id=_json_string(state["host_instance_id"], "host_instance_id"),
-        host=host,
-    )
+    # Persisted compatibility contract; do not import runtime internals here.
+    scope = {
+        "worker_base_url": worker_base_url.rstrip("/"),
+        "deployment_instance_id": deployment_instance_id,
+        "host_instance_id": _json_string(state["host_instance_id"], "host_instance_id"),
+        "source": host,
+    }
+    digest = hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()
+    return base_path.with_name(f"{base_path.stem}.{digest}{base_path.suffix}")
 
 
 def _last_status_path(home: Path) -> Path:

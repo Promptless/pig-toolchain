@@ -15,9 +15,6 @@ from tests.config_helpers import enable_trace_ingestion
 
 from promptless_instruction_hub.compiler import build_hub, init_hub
 from promptless_instruction_hub.fs import validate_json_value
-from tests.reference_runtime.contracts import (
-    TARGET_TRANSPORT_BATCH_BYTES,
-)
 
 from .helpers import (
     _FakeWorkerServer,
@@ -30,6 +27,9 @@ from .helpers import (
     _run_runtime_json,
     _scoped_ledger_path_for_test,
 )
+
+
+TARGET_TRANSPORT_BATCH_BYTES = 6 * 1024 * 1024  # Serialized upload request target.
 
 
 def _seed_ledger_offsets(ledger_path: Path, *source_paths: Path) -> None:

@@ -11,9 +11,6 @@ from tests.config_helpers import enable_trace_ingestion
 
 from promptless_instruction_hub.compiler import build_hub, init_hub
 from promptless_instruction_hub.fs import validate_json_value
-from tests.reference_runtime import (
-    enrollment as host_enrollment,
-)
 
 from .helpers import (
     BROWSER_ENROLLMENT_MESSAGE,
@@ -587,36 +584,6 @@ def test_bootstrap_surfaces_browser_open_failure(tmp_path: Path) -> None:
         assert server.check_ins == []
     finally:
         server.stop()
-
-
-def test_headless_linux_does_not_attempt_browser_launch(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in (
-        "PROMPTLESS_HOST_ENROLLMENT_OPEN_BROWSER",
-        "DISPLAY",
-        "WAYLAND_DISPLAY",
-        "MIR_SOCKET",
-        "WSL_INTEROP",
-        "BROWSER",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(host_enrollment.platform, "system", lambda: "Linux")
-
-    def unexpected_browser_open(*args: object, **kwargs: object) -> bool:
-        pytest.fail(f"headless enrollment attempted browser launch: args={args!r} kwargs={kwargs!r}")
-
-    monkeypatch.setattr(host_enrollment.webbrowser, "open", unexpected_browser_open)
-
-    assert not host_enrollment._open_hosted_enrollment_url("https://app.gopromptless.ai/pig/enroll")
-    assert not host_enrollment._browser_session_available({"BROWSER": "xdg-open"}, "Linux")
-
-
-@pytest.mark.parametrize("display_variable", ("DISPLAY", "WAYLAND_DISPLAY", "MIR_SOCKET", "WSL_INTEROP"))
-def test_linux_browser_session_detection_accepts_graphical_or_wsl_session(display_variable: str) -> None:
-    assert host_enrollment._browser_session_available({display_variable: "available"}, "Linux")
-    assert host_enrollment._browser_session_available(
-        {"PROMPTLESS_HOST_ENROLLMENT_OPEN_BROWSER": "1"},
-        "Linux",
-    )
 
 
 def test_bootstrap_persists_host_global_state_file(tmp_path: Path) -> None:
