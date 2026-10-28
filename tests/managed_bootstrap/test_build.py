@@ -134,47 +134,19 @@ def test_build_rejects_malformed_existing_hook_asset(tmp_path: Path) -> None:
         build_hub(hub_root)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX fallback; Windows command is covered by platform smoke")
-def test_codex_terminal_hook_skips_incomplete_sibling_and_updates_plugin_root(tmp_path: Path) -> None:
-    from promptless_instruction_hub.managed_runtime import _posix_native_terminal_hook_command
+@pytest.mark.parametrize("target", ["claude", "codex"])
+def test_managed_hooks_are_readable_named_commands(target: str) -> None:
+    from promptless_instruction_hub.managed_runtime import _host_runtime_hook_entry
 
-    root = tmp_path / "plugin cache"
-    valid = root / "1.0.1" / "runtime" / HOST_RUNTIME_BIN
-    valid.parent.mkdir(parents=True)
-    valid.write_text('#!/bin/sh\n[ "$1" = version ] && exit 0\nprintf "%s\\n" "$PLUGIN_ROOT" "$@" > "$CAPTURE"\n')
-    valid.chmod(0o755)
-    incomplete = root / "1.0.2" / "runtime" / HOST_RUNTIME_BIN
-    incomplete.parent.mkdir(parents=True)
-    incomplete.write_text("#!/bin/sh\nexit 127\n")
-    incomplete.chmod(0o755)
-    capture = tmp_path / "capture"
-    env = _clean_env(PLUGIN_ROOT=str(root / "1.0.0"), CAPTURE=str(capture), PATH="")
-    result = subprocess.run(
-        ["/bin/sh", "-c", _posix_native_terminal_hook_command("stop")],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=3,
-    )
-    assert result.returncode == 0 and not result.stdout and not result.stderr
-    assert capture.read_text().splitlines() == [
-        str(valid.parent.parent),
-        "collect",
-        "--host",
-        "codex",
-        "--lifecycle",
-        "stop",
-        "--detach",
-        "--quiet",
-    ]
-    valid.unlink()
-    capture.unlink()
-    result = subprocess.run(
-        ["/bin/sh", "-c", _posix_native_terminal_hook_command("stop")],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=3,
-    )
-    assert result.returncode == 0 and not result.stdout and not result.stderr
-    assert not capture.exists()
+    for event in ("SessionStart", "Stop", "SessionEnd", "SubagentStop"):
+        entry = _host_runtime_hook_entry(target, event)["hooks"][0]
+        for key in ("command", "commandWindows"):
+            if key not in entry:
+                continue
+            command = entry[key]
+            assert len(command) < 180
+            assert "promptless-host-runtime" in command
+            assert all(fragment not in command for fragment in ("sh -c", "for ", "if ", ";", "python", "node -e"))
+            if event != "SessionStart":
+                assert ".promptless/instruction-hub/bin/" in command
+                assert "PLUGIN_ROOT" not in command

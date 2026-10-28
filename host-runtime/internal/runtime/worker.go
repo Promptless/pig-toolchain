@@ -250,7 +250,11 @@ func metadata(root string, h Host) Metadata {
 	if root == "" {
 		return m
 	}
-	doc, err := loadState(filepath.Join(root, "hub.managed-runtimes.json"))
+	manifest := filepath.Join(root, "hub.managed-runtimes.json")
+	if _, err := os.Stat(manifest); errors.Is(err, os.ErrNotExist) {
+		manifest = hookMetadataPath(root)
+	}
+	doc, err := loadState(manifest)
 	if err != nil {
 		return m
 	}

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shlex
 import shutil
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
@@ -210,7 +209,7 @@ def _host_runtime_hook_events() -> tuple[str, ...]:
 def _host_runtime_hook_entry(target: Harness, event_name: str) -> dict[str, JsonValue]:
     lifecycle = _host_runtime_lifecycle_arg(event_name)
     if event_name == "SessionStart":
-        hook_command = _host_runtime_start_hook_command(target, lifecycle=lifecycle)
+        hook_command = _host_runtime_start_hook_command(target)
     else:
         hook_command = _host_runtime_terminal_hook_command(target, lifecycle=lifecycle)
     # Codex and Claude both load plugin-root hooks from hooks/hooks.json. Codex may require
@@ -244,13 +243,8 @@ def _host_runtime_hook_timeout(event_name: str) -> int:
     return HOST_RUNTIME_TERMINAL_HOOK_TIMEOUT_SECONDS
 
 
-def _native_hook_command(target: Harness, lifecycle: str, *, start: bool) -> dict[str, JsonValue]:
-    arguments = (
-        ["session-start", "--host", target, "--detach"]
-        if start
-        else ["collect", "--host", target, "--lifecycle", lifecycle, "--detach", "--quiet"]
-    )
-    command_args = " ".join(arguments)
+def _host_runtime_start_hook_command(target: Harness) -> dict[str, JsonValue]:
+    command_args = f"session-start --host {target} --detach"
     if target == "claude":
         # Claude has no per-platform command override. Its documented Bash shell
         # form dispatches through the launcher on every OS (Git Bash on Windows).
@@ -261,58 +255,20 @@ def _native_hook_command(target: Harness, lifecycle: str, *, start: bool) -> dic
         }
     return {
         "command": f'"${{PLUGIN_ROOT}}/runtime/promptless-host-runtime" {command_args}',
-        "commandWindows": f'& "${{PLUGIN_ROOT}}/runtime/promptless-host-runtime.exe" {command_args}',
+        "commandWindows": f'& "$env:PLUGIN_ROOT/runtime/promptless-host-runtime.exe" {command_args}',
     }
-
-
-def _host_runtime_start_hook_command(target: Harness, *, lifecycle: str) -> dict[str, JsonValue]:
-    return _native_hook_command(target, lifecycle, start=True)
 
 
 def _host_runtime_terminal_hook_command(target: Harness, *, lifecycle: str) -> dict[str, JsonValue]:
+    arguments = f"collect --host {target} --lifecycle {lifecycle} --detach --quiet"
+    executable = ".promptless/instruction-hub/bin/promptless-host-runtime"
     if target == "claude":
-        return _native_hook_command(target, lifecycle, start=False)
+        # Git Bash may use a different HOME; Go uses USERPROFILE on Windows.
+        return {"command": f'"${{USERPROFILE:-$HOME}}/{executable}" {arguments}', "shell": "bash"}
     return {
-        "command": _posix_native_terminal_hook_command(lifecycle),
-        "commandWindows": _windows_native_terminal_hook_command(lifecycle),
+        "command": f'"$HOME/{executable}" {arguments}',
+        "commandWindows": f'& "$env:USERPROFILE/{executable}.cmd" {arguments}',
     }
-
-
-def _posix_native_terminal_hook_command(lifecycle: str) -> str:
-    """Run even after an upgrade deletes the directory cached by a live session."""
-    script = (
-        'usable() { [ -f "$1" ] && [ -x "$1" ] && "$1" version >/dev/null 2>&1; }; '
-        'root=${PLUGIN_ROOT:-}; [ -n "$root" ] || exit 0; '
-        'runtime="$root/runtime/promptless-host-runtime"; '
-        'if ! usable "$runtime"; then '
-        "runtime=; parent=${root%/*}; "
-        'for candidate in "$parent"/*/runtime/promptless-host-runtime; do '
-        'if usable "$candidate"; then runtime=$candidate; fi; '
-        "done; fi; "
-        '[ -n "$runtime" ] || exit 0; '
-        "export PLUGIN_ROOT=${runtime%/runtime/promptless-host-runtime}; "
-        f'exec "$runtime" collect --host codex --lifecycle {lifecycle} --detach --quiet'
-    )
-    # Use the OS shell explicitly: a caller's zsh may reject an unmatched glob.
-    return f"/bin/sh -c {shlex.quote(script)}"
-
-
-def _windows_native_terminal_hook_command(lifecycle: str) -> str:
-    """Use PowerShell's literal paths so installed directory names stay data."""
-    return (
-        "$ErrorActionPreference = 'Stop'; "
-        "$root = $env:PLUGIN_ROOT; if ([string]::IsNullOrEmpty($root)) { exit 0 }; "
-        "$runtime = Join-Path $root 'runtime/promptless-host-runtime.exe'; "
-        "if (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) { "
-        "$runtime = $null; $parent = Split-Path -Path $root -Parent; "
-        "if (Test-Path -LiteralPath $parent -PathType Container) { "
-        "foreach ($sibling in (Get-ChildItem -LiteralPath $parent -Directory -ErrorAction Stop | Sort-Object Name)) { "
-        "$candidate = Join-Path $sibling.FullName 'runtime/promptless-host-runtime.exe'; "
-        "if (Test-Path -LiteralPath $candidate -PathType Leaf) { $runtime = $candidate } "
-        "} } }; if (-not $runtime) { exit 0 }; "
-        "$env:PLUGIN_ROOT = Split-Path -Path (Split-Path -Path $runtime -Parent) -Parent; "
-        f"& $runtime collect --host codex --lifecycle {lifecycle} --detach --quiet; exit $LASTEXITCODE"
-    )
 
 
 def _host_runtime_lifecycle_arg(event_name: str) -> str:

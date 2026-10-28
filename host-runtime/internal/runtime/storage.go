@@ -42,6 +42,9 @@ func writeState(path string, v any) error {
 	return atomicWrite(path, append(b, '\n'))
 }
 func atomicWrite(path string, b []byte) error {
+	return atomicWriteMode(path, b, 0600)
+}
+func atomicWriteMode(path string, b []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -50,6 +53,10 @@ func atomicWrite(path string, b []byte) error {
 		return err
 	}
 	defer os.Remove(f.Name())
+	if err = f.Chmod(mode); err != nil {
+		f.Close()
+		return err
+	}
 	if _, err = f.Write(b); err != nil {
 		f.Close()
 		return err

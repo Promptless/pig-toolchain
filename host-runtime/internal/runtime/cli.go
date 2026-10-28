@@ -165,6 +165,16 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	out := &output{stdout: stdout, stderr: stderr}
 	defer out.flush()
 	h := resolveHost(o.Host)
+	if name == "session-start" && o.Detach {
+		if err = installHookRuntime(pluginRoot()); err != nil {
+			out.emit(object{
+				"status": "error", "host": h, "reason": "hook_install_failed", "stage": "session-start",
+				"error_code": fmt.Sprintf("%T", err),
+				"message":    "Could not install the persistent Promptless hook runtime: " + redactText(err.Error()),
+			}, false)
+			return 1
+		}
+	}
 	if name == "version" {
 		if o.JSON {
 			out.command(runtimeInfo())

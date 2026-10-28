@@ -57,7 +57,7 @@ def verify_runtime(plugin: Path, workspace: Path) -> None:
     assert record["sha256"] == inventory["bundle_sha256"]
     assert record["source_sha256"] == inventory["source_sha256"]
     assert not list(runtime.rglob("*.py")) and not list(runtime.rglob("*.cjs"))
-    home = workspace / ("home-" + plugin.parent.name)
+    home = workspace / ("home with spaces-" + plugin.parent.name)
     home.mkdir()
     env = {
         **os.environ,
@@ -104,48 +104,69 @@ def verify_runtime(plugin: Path, workspace: Path) -> None:
     for path in state.rglob("*.json"):
         assert "DO_NOT_PERSIST" not in path.read_text(), path
 
-    # Run the actual generated terminal hook through its host's command form.
-    # Keep whitespace in plugin paths so quoting is exercised on every platform.
+    # Execute the actual generated command forms. Startup installs the launcher;
+    # terminal hooks must still work after an update removes the cached plugin.
     target = plugin.parent.name
     env.update(CLAUDE_PLUGIN_ROOT=str(plugin), CURSOR_PLUGIN_ROOT=str(plugin))
     hooks = json.loads((plugin / "hooks/hooks.json").read_text())["hooks"]
-    entry = hooks["stop"][0] if target == "cursor" else hooks["Stop"][0]["hooks"][0]
-    command: list[str] | str
-    if os.name == "nt":
-        if target == "claude":
-            assert entry["shell"] == "bash" and "args" not in entry
-            git = shutil.which("git")
-            assert git, "Git Bash is required by the generated Claude hook on Windows"
-            shell = Path(git).resolve().parent.parent / "bin/bash.exe"
-            assert shell.is_file(), shell
-            command = [str(shell), "--noprofile", "--norc", "-c", entry["command"]]
-        elif target == "cursor":
-            # cmd.exe does not understand the C-style quote escaping used by
-            # subprocess.list2cmdline. /s /c strips this outer pair of quotes.
-            hook = entry["command"].replace("${CURSOR_PLUGIN_ROOT}", str(plugin))
-            command = f'"{os.environ["COMSPEC"]}" /d /s /c "{hook}"'
-        else:
-            shell = shutil.which("pwsh") or shutil.which("powershell")
-            assert shell, "PowerShell is needed to exercise Codex's Windows command form"
-            command = [shell, "-NoProfile", "-NonInteractive", "-Command", entry["commandWindows"]]
-    else:
-        command = ["/bin/sh", "-c", entry["command"]]
     status_path = state / "last-bootstrap-status.json"
-    status_path.unlink()
-    result = subprocess.run(
-        command,
-        input='{"conversation_id":"wrapper-smoke"}',
-        capture_output=True,
-        text=True,
-        timeout=3,
-        env=env,
-        cwd=workspace,
-    )
-    assert result.returncode == 0 and not result.stdout and not result.stderr, result
-    deadline = time.monotonic() + 15
-    while not status_path.is_file() and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert status_path.is_file(), f"{target} generated hook did not run its detached child"
+
+    def execute_hook(event: str) -> None:
+        entry = hooks[event][0] if target == "cursor" else hooks[event][0]["hooks"][0]
+        command = hook_command(entry, target, env)
+        status_path.unlink(missing_ok=True)
+        result = subprocess.run(
+            command,
+            input='{"conversation_id":"wrapper-smoke"}',
+            capture_output=True,
+            text=True,
+            timeout=3,
+            env=env,
+            cwd=workspace,
+        )
+        assert result.returncode == 0 and not result.stdout and not result.stderr, result
+        deadline = time.monotonic() + 15
+        while not status_path.is_file() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert status_path.is_file(), f"{target} {event} hook did not run its detached child"
+
+    if target == "cursor":
+        execute_hook("stop")
+    else:
+        execute_hook("SessionStart")
+        stable = state / "bin" / "promptless-host-runtime"
+        assert stable.is_file()
+        # Install an updated plugin using the same home, then delete both cache
+        # entries. No same-plugin sibling can rescue these terminal invocations.
+        updated = plugin.with_name("pig updated")
+        shutil.copytree(plugin, updated)
+        original_env = env.copy()
+        env.update(PLUGIN_ROOT=str(updated), CLAUDE_PLUGIN_ROOT=str(updated), CURSOR_PLUGIN_ROOT=str(updated))
+        execute_hook("SessionStart")
+        env.update(original_env)
+        shutil.rmtree(plugin)
+        shutil.rmtree(updated)
+        for event in ("Stop", "SessionEnd", "SubagentStop"):
+            execute_hook(event)
+
+
+def hook_command(entry: dict[str, Any], target: str, env: dict[str, str]) -> list[str] | str:
+    if os.name != "nt":
+        return ["/bin/sh", "-c", entry["command"]]
+    if target == "claude":
+        assert entry["shell"] == "bash" and "args" not in entry
+        git = shutil.which("git")
+        assert git, "Git Bash is required by the generated Claude hook on Windows"
+        shell = Path(git).resolve().parent.parent / "bin/bash.exe"
+        assert shell.is_file(), shell
+        return [str(shell), "--noprofile", "--norc", "-c", entry["command"]]
+    if target == "cursor":
+        # cmd.exe /s /c strips this outer pair of quotes.
+        hook = entry["command"].replace("${CURSOR_PLUGIN_ROOT}", env["CURSOR_PLUGIN_ROOT"])
+        return f'"{os.environ["COMSPEC"]}" /d /s /c "{hook}"'
+    shell = shutil.which("pwsh") or shutil.which("powershell")
+    assert shell, "PowerShell is needed to exercise Codex's Windows command form"
+    return [shell, "-NoProfile", "-NonInteractive", "-Command", entry["commandWindows"]]
 
 
 def verify_hub(hub: Path, workspace: Path) -> None:

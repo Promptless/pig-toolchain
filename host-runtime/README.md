@@ -42,6 +42,16 @@ PowerShell override and Cursor uses the batch launcher. An explicit
 native tests and generated plugins on Linux, macOS, and Windows; cross-compiling
 ARM64 is not a substitute for execution on ARM64 Windows or Linux.
 
+Claude and Codex `session-start --detach` install the executing binary under
+`~/.promptless/instruction-hub/runtime/<binary-sha256>/`, save plugin metadata
+keyed by its original path, and atomically update the private `bin/` launchers.
+Terminal hooks use these short, stable paths even after all plugin cache versions
+are removed. Installation uses a bounded cross-process lock and keeps existing
+immutable copies; a later session may select a newer binary without replacing an
+executable that Windows still has open. Cursor retains its bundled short launcher.
+CI executes startup, a second installation, and terminal hooks after deleting both
+plugin directories, with an empty `PATH` and spaces in plugin and home paths.
+
 ## Maintenance boundaries
 
 `cmd/promptless-host-runtime` is the CLI entry point. `internal/runtime` keeps

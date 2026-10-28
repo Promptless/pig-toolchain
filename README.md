@@ -826,15 +826,30 @@ plugins contain executables for macOS, Linux, and Windows on amd64 and arm64;
 installed managed hooks do not require Python, Node, or Go. The toolchain compiler
 and the adapter for user-authored portable hooks remain Python.
 
-The stable `runtime/promptless-host-runtime` shell launcher selects the native
+The bundled `runtime/promptless-host-runtime` shell launcher selects the native
 executable. Claude hooks explicitly use Bash, which requires Git Bash on Windows.
-Windows Codex and Cursor hooks invoke `runtime/promptless-host-runtime.exe`
+Windows Codex startup and Cursor hooks invoke `runtime/promptless-host-runtime.exe`
 (amd64, with Windows ARM64 emulation); the bundle also includes an explicit
 native ARM64 executable. Claude and Codex
 SessionStart launch detached supervisors with closed output pipes. The Claude
 supervisor collects both Claude Code and detected Claude Desktop sources.
-Codex terminal hooks can fall back to a complete same-plugin sibling release
-when the recorded plugin root is stale, or exit quietly if no release is available.
+Claude and Codex startup also install a private launcher under
+`~/.promptless/instruction-hub/bin/`. Their terminal hooks call that launcher
+directly, without inline shell programs or interpreter discovery:
+
+```sh
+"$HOME/.promptless/instruction-hub/bin/promptless-host-runtime" collect --host codex --lifecycle session_end --detach --quiet
+```
+
+The launcher selects an immutable executable copy under
+`~/.promptless/instruction-hub/runtime/`. Installation is locked and atomic;
+Windows updates switch a batch launcher instead of replacing a running `.exe`.
+Plugin metadata is saved per original plugin path so terminal hooks retain the
+session's plugin identity even after an update removes its entire cache entry.
+Startup must succeed once to install the launcher. Installation failures are
+reported through hook output and durable diagnostics. Runtime copies are retained
+across updates so running processes remain valid; removing the plugin cache does
+not remove these private copies.
 
 Cursor uses a shell/batch launcher and the Go `cursor-notify` command. The
 foreground accepts only bounded identity/path metadata, waits at most 200 ms
