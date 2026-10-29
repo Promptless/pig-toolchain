@@ -1,12 +1,15 @@
 package runtime
 
 func runEnroll(h Host, out *output) (object, error) {
+	return runEnrollMode(h, out, false)
+}
+func runEnrollMode(h Host, out *output, device bool) (object, error) {
 	target := h.enrollment()
 	c, err := enrollmentContext(metadata(pluginRoot(), target))
 	if err != nil {
 		return nil, err
 	}
-	credential, reason, err := obtainCredential(c, out, true)
+	credential, reason, err := cachedOrEnroll(c, out, true, device)
 	if err != nil {
 		return nil, err
 	}

@@ -12,9 +12,9 @@ import (
 )
 
 type commandOptions struct {
-	Host                                                    string
-	Lifecycle, Config, EventFile                            string
-	Quiet, IfSources, Active, Detach, Supervised, JSON, Yes bool
+	Host                                                            string
+	Lifecycle, Config, EventFile                                    string
+	Quiet, IfSources, Active, Detach, Supervised, JSON, Yes, Device bool
 }
 
 func parseCommand(args []string, stderr io.Writer) (string, commandOptions, error) {
@@ -37,6 +37,9 @@ func parseCommand(args []string, stderr io.Writer) (string, commandOptions, erro
 		f.BoolVar(&o.Detach, "detach", false, "Detach notification collector")
 	case "ensure", "session-start", "collect", "status", "enroll", "reset":
 		f.StringVar(&o.Host, "host", "auto", "auto, codex, claude, claude-desktop, or cursor")
+		if name == "enroll" {
+			f.BoolVar(&o.Device, "device", false, "Approve enrollment from another device")
+		}
 		if name == "reset" {
 			f.BoolVar(&o.Yes, "yes", false, "Confirm local state reset")
 		}
@@ -206,7 +209,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "reset":
 		payload, err = resetState(h)
 	case "enroll":
-		payload, err = runEnroll(h, out)
+		payload, err = runEnrollMode(h, out, o.Device)
 	case "ensure":
 		err = ensure(h, o.Quiet, o.IfSources, true, out)
 	case "cloud-collect":
