@@ -372,6 +372,22 @@ the definition. Offline builds use this lock; CI build and publish modes refresh
 it. Catalog definitions use `ref`; locks, release provenance, and marketplaces
 use the resolved `sha`. Consumers update installed plugins through their host.
 
+When comparing against a previous release, verification checks the Claude
+plugin's directory tree, including file contents and executable modes. Changes
+elsewhere in the upstream repository do not require a new plugin version.
+
+If a `"latest"` update changes that directory without changing its version,
+resolution retains the published commit for every target of that plugin. Other
+Hub changes can publish. The command reports the deferred and retained commits
+on stderr; its verification output and the lock identify the retained commit.
+Automatic updates resume when upstream publishes a different version or restores
+the published directory contents.
+
+Retention requires `--previous-release-root` (supplied by publish mode), the same
+repository URL and target paths, and the same enabled targets for that plugin.
+Explicit pins and configuration changes still require a different Claude version
+when the plugin changes. Fetch failures and invalid manifests fail publication.
+
 The generated PIG plugin includes an
 [`add-external-plugin` skill](src/promptless_instruction_hub/managed_skill_assets/add-external-plugin/shared/SKILL.md)
 with instructions for verification, updates, rollback, private repositories,

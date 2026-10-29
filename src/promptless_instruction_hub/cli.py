@@ -175,10 +175,23 @@ def _dispatch(args: argparse.Namespace) -> int:
         )
         return 0
     if args.command in {"verify-external", "resolve-external"}:
-        operation = resolve_external_plugins if args.command == "resolve-external" else verify_external_plugins
-        records = operation(
-            args.hub, previous_release_root=args.previous_release_root, hub_relative_path=args.hub_relative_path
-        )
+        if args.command == "resolve-external":
+            resolution = resolve_external_plugins(
+                args.hub, previous_release_root=args.previous_release_root, hub_relative_path=args.hub_relative_path
+            )
+            records = resolution.verified_plugins
+            for update in resolution.retained_updates:
+                print(
+                    f"warning: {update.plugin_id} (claude): deferred upstream commit {update.candidate.sha}; "
+                    f"plugin contents changed without changing version {update.upstream_version}. "
+                    f"Retaining published commit {update.retained.sha} for all targets. "
+                    "Publish a different upstream version to resume automatic updates.",
+                    file=sys.stderr,
+                )
+        else:
+            records = verify_external_plugins(
+                args.hub, previous_release_root=args.previous_release_root, hub_relative_path=args.hub_relative_path
+            )
         print(json.dumps({"verified_external_plugins": records}, indent=2, sort_keys=True))
         return 0
     if args.command == "build":

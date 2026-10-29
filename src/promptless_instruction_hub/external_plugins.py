@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 from typing import cast
 
@@ -50,6 +50,12 @@ class GitRevision:
     sha: str
     files: dict[str, str]
 
+    def tree_id(self, path: str) -> str:
+        """Identify a plugin directory's names, file contents, and executable modes."""
+
+        tree = f"{self.sha}^{{tree}}" if path == "." else f"{self.sha}:{path}"
+        return _git(self.root, "rev-parse", tree).strip()
+
     def manifest(self, plugin: ResolvedExternalPluginDefinition, target: ExternalPluginHarness) -> dict[str, JsonValue]:
         prefix = plugin.targets[target].path
         prefix = "" if prefix == "." else prefix + "/"
@@ -78,6 +84,24 @@ class GitRevision:
         return manifest
 
 
+@dataclass(frozen=True)
+class RetainedExternalUpdate:
+    """An automatic update deferred because Claude would reuse its cached version."""
+
+    plugin_id: str
+    candidate: ResolvedGitSource
+    retained: ResolvedGitSource
+    upstream_version: str
+
+
+@dataclass
+class ExternalPluginResolution:
+    """Verified publication sources and automatic updates held at the published pin."""
+
+    verified_plugins: list[dict[str, JsonValue]] = dataclass_field(default_factory=list)
+    retained_updates: list[RetainedExternalUpdate] = dataclass_field(default_factory=list)
+
+
 def verify_external_plugins(
     hub_root: Path, *, previous_release_root: Path | None = None, hub_relative_path: str = ""
 ) -> list[dict[str, JsonValue]]:
@@ -85,13 +109,18 @@ def verify_external_plugins(
 
     validation = load_external_resolutions(hub_root, validate_hub(hub_root))
     with _git_revisions() as revision:
-        return _verify_external_plugins(validation, revision, previous_release_root, hub_relative_path)
+        return _verify_external_plugins(validation, revision, previous_release_root, hub_relative_path).verified_plugins
 
 
 def resolve_external_plugins(
     hub_root: Path, *, previous_release_root: Path | None = None, hub_relative_path: str = ""
-) -> list[dict[str, JsonValue]]:
-    """Refresh latest sources and save their pins only after every upstream check passes."""
+) -> ExternalPluginResolution:
+    """Resolve latest sources, retaining published pins for updates without a version change.
+
+    Retention requires a previous release and an unchanged repository and target
+    configuration. Explicit pins and invalid upstream manifests still fail. Save
+    the lock only after all selected sources pass verification.
+    """
 
     validation = validate_hub(hub_root)
     lock = ExternalPluginLock()
@@ -103,7 +132,11 @@ def resolve_external_plugins(
                     type="git", url=definition.source.url, sha=revision(definition.source).sha
                 )
         resolved = apply_external_resolutions(validation, lock)
-        records = _verify_external_plugins(resolved, revision, previous_release_root, hub_relative_path)
+        result = _verify_external_plugins(
+            resolved, revision, previous_release_root, hub_relative_path, retain_latest=True
+        )
+        for update in result.retained_updates:
+            lock.plugins[update.plugin_id] = update.retained
     path = hub_root / EXTERNAL_LOCK_PATH
     if lock.plugins:
         # Never leave a partial lock behind if the process stops during the write.
@@ -113,7 +146,7 @@ def resolve_external_plugins(
             staged.replace(path)
     else:
         path.unlink(missing_ok=True)
-    return records
+    return result
 
 
 RevisionReader = Callable[[RequestedGitSource | ResolvedGitSource], GitRevision]
@@ -143,14 +176,17 @@ def _verify_external_plugins(
     revision: RevisionReader,
     previous_release_root: Path | None,
     hub_relative_path: str,
-) -> list[dict[str, JsonValue]]:
+    *,
+    retain_latest: bool = False,
+) -> ExternalPluginResolution:
+    result = ExternalPluginResolution()
     plugins = [
         plugin.definition
         for plugin in validation.stable_plugins
         if isinstance(plugin.definition, ResolvedExternalPluginDefinition)
     ]
     if not plugins and previous_release_root is None:
-        return []
+        return result
     previous: dict[str, ResolvedExternalPluginDefinition] = {}
     previous_authored_ids: set[str] = set()
     previous_version: str | None = None
@@ -184,14 +220,13 @@ def _verify_external_plugins(
         and "claude" in validation.config.targets
     ]
     if not plugins and not authored_replacements:
-        return []
+        return result
 
     def previous_claude_version(plugin: ResolvedExternalPluginDefinition) -> JsonValue:
         if previous_external_versions is not None:
             return previous_external_versions[(plugin.id, "claude")]
         return revision(plugin.source).manifest(plugin, "claude").get("version")
 
-    records: list[dict[str, JsonValue]] = []
     if authored_replacements:
         publish_version = resolve_release_version(
             validation, previous_release_root=previous_release_root, hub_relative_path=hub_relative_path
@@ -205,28 +240,56 @@ def _verify_external_plugins(
                 )
 
     for plugin in plugins:
-        for target in sorted(plugin.targets):
-            if target not in validation.config.targets:
-                continue
-            manifest = revision(plugin.source).manifest(plugin, target)
-            old = previous.get(plugin.id)
-            old_version = None
+        manifests = {
+            target: revision(plugin.source).manifest(plugin, target)
+            for target in sorted(plugin.targets)
+            if target in validation.config.targets
+        }
+        old = previous.get(plugin.id)
+        old_version = None
+        claude = manifests.get("claude")
+        if claude is not None and "claude" in previous_targets:
             if (
-                target == "claude"
-                and old is not None
-                and target in old.targets
-                and target in previous_targets
-                and (old.source != plugin.source or old.targets[target] != plugin.targets[target])
+                old is not None
+                and "claude" in old.targets
+                and (old.source != plugin.source or old.targets["claude"] != plugin.targets["claude"])
             ):
                 old_version = previous_claude_version(old)
-            elif target == "claude" and target in previous_targets and plugin.id in previous_authored_ids:
+            elif plugin.id in previous_authored_ids:
                 old_version = previous_version
-            if old_version is not None and manifest.get("version") == old_version:
-                raise InstructionHubError(
-                    f"{plugin.id} (claude): changed source retains upstream version {manifest['version']}; "
-                    "Claude may keep the cached plugin. Select an upstream release with a different version."
+        if claude is not None and old_version is not None and claude.get("version") == old_version:
+            unchanged_content = (
+                old is not None
+                and old.source.url == plugin.source.url
+                and old.targets["claude"] == plugin.targets["claude"]
+                and revision(old.source).tree_id(old.targets["claude"].path)
+                == revision(plugin.source).tree_id(plugin.targets["claude"].path)
+            )
+            requested = validation.plugins[plugin.id]
+            can_retain = (
+                retain_latest
+                and isinstance(requested, ExternalPluginDefinition)
+                and requested.source.ref == "latest"
+                and old is not None
+                and old.source.url == plugin.source.url
+                and old.targets == plugin.targets
+                and set(manifests) == set(old.targets).intersection(previous_targets)
+            )
+            if not unchanged_content:
+                if not can_retain or old is None:
+                    raise InstructionHubError(
+                        f"{plugin.id} (claude): changed source retains upstream version {old_version}; "
+                        "Claude may keep the cached plugin. Select an upstream release with a different version."
+                    )
+                result.retained_updates.append(
+                    RetainedExternalUpdate(plugin.id, plugin.source, old.source, str(old_version))
                 )
-            records.append(
+                plugin = plugin.model_copy(update={"source": old.source})
+                # Every target shares one source pin. Validate the retained revision
+                # for every selected target before recording or persisting it.
+                manifests = {target: revision(plugin.source).manifest(plugin, target) for target in manifests}
+        for target, manifest in manifests.items():
+            result.verified_plugins.append(
                 {
                     "id": plugin.id,
                     "target": target,
@@ -236,7 +299,7 @@ def _verify_external_plugins(
                     "upstream_version": manifest.get("version"),
                 }
             )
-    return records
+    return result
 
 
 def _fetch_revision(root: Path, url: str, requested: str) -> GitRevision:

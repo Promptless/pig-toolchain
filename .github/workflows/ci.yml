@@ -110,7 +110,8 @@ jobs:
           hub-root: test-hub
 
   release-artifacts:
-    runs-on: ubuntu-latest
+    # setup-python provides the Python 3.9 runtime floor on Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
