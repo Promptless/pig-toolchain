@@ -69,10 +69,10 @@ func baseURL(env, def string) (string, error) {
 	return strings.TrimRight(raw, "/"), nil
 }
 func workerURL() (string, error) {
-	return baseURL("PROMPTLESS_WORKER_BASE_URL", "https://pig.promptless.ai")
+	return configuredBaseURL("worker_base_url", "PROMPTLESS_WORKER_BASE_URL", "https://pig.promptless.ai")
 }
 func dashboardURL() (string, error) {
-	return baseURL("PROMPTLESS_DASHBOARD_BASE_URL", "https://app.gopromptless.ai")
+	return configuredBaseURL("dashboard_base_url", "PROMPTLESS_DASHBOARD_BASE_URL", "https://app.gopromptless.ai")
 }
 func sameOrigin(a, b *url.URL) bool {
 	port := func(u *url.URL) string {
@@ -262,6 +262,10 @@ func pluginRoot() string {
 		if value := os.Getenv(key); nonempty(value) {
 			return expandPath(value)
 		}
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		return installedPluginRoot(exe)
 	}
 	return ""
 }
