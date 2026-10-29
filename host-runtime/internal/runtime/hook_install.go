@@ -49,6 +49,10 @@ func installHookExecutable(exe, root string) error {
 		return errors.New("installed hook runtime digest mismatch")
 	}
 	if root != "" {
+		config, err := runtimeConfigBytes(root, false)
+		if err != nil {
+			return err
+		}
 		manifest, err := os.ReadFile(filepath.Join(root, "hub.managed-runtimes.json"))
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -60,6 +64,9 @@ func installHookExecutable(exe, root string) error {
 			if err = atomicWrite(hookMetadataPath(root), manifest); err != nil {
 				return err
 			}
+		}
+		if err = atomicWrite(hookMetadataPath(root)+".config", config); err != nil {
+			return err
 		}
 	}
 	// Only our hex digest and fixed filename enter shell source. User paths are

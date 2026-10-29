@@ -838,6 +838,25 @@ worker. Gemini does not receive that managed runtime. See the
 [Cursor collection guide](docs/cursor-trace-ingestion.md) for prerequisites,
 capture limits, and desktop qualification.
 
+For a customer worker or dashboard, configure the public HTTPS origins in the hub:
+
+```yaml
+trace_ingestion:
+  enabled: true
+  worker_base_url: https://pig.example.com
+  dashboard_base_url: https://dashboard.example.com
+```
+
+Both fields are optional and default to the Promptless production endpoints.
+They accept origins only: no credentials, path, query, or fragment. The toolchain
+packages these settings in `hub.runtime-config.json` with each managed runtime,
+so installed plugins use the hub's destinations without machine-level setup.
+`PROMPTLESS_WORKER_BASE_URL` and `PROMPTLESS_DASHBOARD_BASE_URL` override their
+respective packaged values when needed. Invalid packaged configuration fails
+with a diagnostic instead of silently selecting another destination. These
+settings contain public addresses; enrollment still requires user approval and
+stores credentials locally, outside the published plugin.
+
 After changing this setting, publish the hub and refresh its installed plugins.
 Disabling it removes managed hooks from the new release; an older installed
 plugin keeps its hooks until refreshed. It does not delete previously ingested

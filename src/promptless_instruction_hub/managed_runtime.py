@@ -17,7 +17,7 @@ from promptless_instruction_hub.native_manifest import (
     NativeManifest,
     validate_bundle,
 )
-
+from promptless_instruction_hub.runtime_config import RUNTIME_CONFIG_NAME, RUNTIME_CONFIG_SCHEMA_VERSION
 
 RuntimeStatus = Literal["included"]
 
@@ -105,6 +105,7 @@ def render_managed_runtimes(
         return ()
 
     native_manifest = _copy_runtime_bundle(target_root)
+    _write_runtime_config(target_root, config)
     _write_host_runtime_hooks(target_root, target)
     record = ManagedRuntimeRecord(
         id=HOST_RUNTIME_ID,
@@ -126,6 +127,19 @@ def render_managed_runtimes(
     )
     _write_plugin_manifest(target_root, (record,))
     return (record,)
+
+
+def _write_runtime_config(target_root: Path, config: HubConfig) -> None:
+    """Keep deployment configuration separate from enrollment metadata and code hashes."""
+
+    runtime_config: dict[str, JsonValue] = {"schema_version": RUNTIME_CONFIG_SCHEMA_VERSION}
+    for key, value in (
+        ("worker_base_url", config.trace_ingestion.worker_base_url),
+        ("dashboard_base_url", config.trace_ingestion.dashboard_base_url),
+    ):
+        if value is not None:
+            runtime_config[key] = value
+    write_json(target_root / RUNTIME_CONFIG_NAME, runtime_config)
 
 
 def _copy_runtime_bundle(target_root: Path) -> NativeManifest:
