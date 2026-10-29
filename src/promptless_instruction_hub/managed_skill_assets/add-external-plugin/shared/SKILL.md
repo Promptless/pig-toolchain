@@ -82,7 +82,7 @@ locked commits without refreshing the lock or changing the worktree.
 CI build and publish modes refresh latest, while check mode verifies the lock.
 Catalog definitions use `source.ref` for the requested revision. The generated
 lock, marketplaces, and release provenance use `source.sha` for the resolved
-commit, leaving `ref: latest` in source for the next publication. An upstream
+commit, leaving `ref: latest` in source for the next publication. A resolved pin
 change advances the Hub release. Latest does not schedule publication or force
 desktop updates. For automatic refreshes, configure the Hub's publish workflow
 to run on a schedule. Consumers use their host's update workflow to refresh
@@ -90,11 +90,19 @@ installed plugins.
 
 For fixed updates or rollback, set `source.ref` to the desired reviewed commit
 SHA and repeat these checks. Resolution removes unused lock entries. Publication
-compares the previous release and rejects
-Claude source or path changes that keep the same explicit upstream version,
-because Claude may retain its cached plugin. Select a commit with a different
-upstream version; changing the Hub version does not override it. When a previous
-release checkout is available, run `pig resolve-external --hub .
+compares the Claude plugin's directory tree with the previous release, including
+file contents and executable modes. Changes elsewhere in the repository do not
+require a new plugin version.
+
+If a latest update changes that directory but keeps its explicit version,
+resolution retains the published commit for all targets and reports both commits
+on stderr. Other Hub changes can publish. Retention requires the same repository
+URL, target paths, and enabled targets for that plugin. Explicit pins and
+configuration changes that reuse a Claude version still fail when the plugin
+changes, because Claude may retain its cached plugin. Select a commit with a
+different upstream version; changing the Hub version does not override it.
+
+When a previous release checkout is available, run `pig resolve-external --hub .
 --previous-release-root /path/to/previous-release` to check this before CI.
 For a nested Hub, also pass `--hub-relative-path <path-within-repository>`.
 

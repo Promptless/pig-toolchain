@@ -33,6 +33,7 @@ from .external_helpers import (
     write_external,
 )
 from .helpers import (
+    _configure_split_plugin_hub,
     _git,
     _git_output,
     _init_action_repo,
@@ -193,7 +194,215 @@ def test_switching_latest_to_the_same_fixed_commit_preserves_release_identity(tm
     assert build_hub(tmp_path).release_hash == latest.release_hash
 
 
-@pytest.mark.parametrize("failure", ["same-version", "missing-manifest", "unavailable"])
+@pytest.mark.parametrize("latest", [False, True])
+def test_unrelated_upstream_changes_accept_a_new_commit_without_a_version_bump(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, latest: bool
+) -> None:
+    upstream, hub = tmp_path / "upstream", init_hub(tmp_path / "hub", org="Promptless")
+    sha = make_upstream(upstream, monkeypatch)
+    write_external(hub, latest_definition() if latest else external_definition(sha))
+    resolve_external_plugins(hub)
+    build_hub(hub)
+    previous = shutil.copytree(hub, tmp_path / "previous")
+    (upstream / "README.md").write_text("Unrelated repository documentation\n")
+    new_sha = commit_upstream(upstream)
+    if not latest:
+        write_external(hub, external_definition(new_sha))
+
+    result = resolve_external_plugins(hub, previous_release_root=previous)
+
+    assert result.retained_updates == []
+    assert {record["sha"] for record in result.verified_plugins} == {new_sha}
+    assert {record["sha"] for record in verify_external_plugins(hub, previous_release_root=previous)} == {new_sha}
+
+
+@pytest.mark.parametrize("path", [".", PLUGIN_PATH])
+@pytest.mark.parametrize("change", ["edit", "add", "delete", "executable"])
+def test_changed_plugin_contents_retain_the_published_pin_for_all_targets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str, change: str
+) -> None:
+    upstream, hub = tmp_path / "upstream", init_hub(tmp_path / "hub", org="Promptless")
+    sha = make_upstream(upstream, monkeypatch, path=path)
+    reference = upstream / path / "skills/example/reference.md"
+    if change == "delete":
+        reference.write_text("Reference to remove\n")
+        sha = commit_upstream(upstream)
+    write_external(hub, latest_definition(path=path))
+    resolve_external_plugins(hub)
+    build_hub(hub)
+    previous = shutil.copytree(hub, tmp_path / "previous")
+    skill = upstream / path / "skills/example/SKILL.md"
+    if change == "edit":
+        skill.write_text("# Updated skill\n")
+    elif change == "add":
+        (skill.parent / "reference.md").write_text("New reference\n")
+    elif change == "delete":
+        reference.unlink()
+    else:
+        _git(upstream, "update-index", "--chmod=+x", str(skill.relative_to(upstream)))
+        # Commit the index directly so platforms with core.fileMode=false still exercise the mode change.
+        _git(upstream, "commit", "-m", "make skill executable")
+    new_sha = (
+        _git_output(upstream, "rev-parse", "HEAD").strip() if change == "executable" else commit_upstream(upstream)
+    )
+
+    result = resolve_external_plugins(hub, previous_release_root=previous)
+
+    assert len(result.retained_updates) == 1
+    retained = result.retained_updates[0]
+    assert retained.plugin_id == "doc-detective"
+    assert retained.candidate.sha == new_sha
+    assert retained.retained.sha == sha
+    assert retained.upstream_version == "1.2.3"
+    assert {record["sha"] for record in result.verified_plugins} == {sha}
+    assert {record["target"] for record in result.verified_plugins} == {"claude", "codex", "cursor"}
+    assert json.loads((hub / EXTERNAL_LOCK_PATH).read_text())["plugins"]["doc-detective"]["sha"] == sha
+    assert {record["sha"] for record in verify_external_plugins(hub, previous_release_root=previous)} == {sha}
+
+    # Verification checks the selected pin strictly; only resolution may retain a published revision.
+    resolve_external_plugins(hub)
+    with pytest.raises(InstructionHubError, match="retains upstream version"):
+        verify_external_plugins(hub, previous_release_root=previous)
+
+
+def test_cursor_only_directory_change_does_not_hold_back_an_unchanged_claude_plugin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream, hub = tmp_path / "upstream", init_hub(tmp_path / "hub", org="Promptless")
+    make_upstream(upstream, monkeypatch)
+    shutil.copytree(upstream / PLUGIN_PATH, upstream / "cursor-plugin")
+    commit_upstream(upstream)
+    definition = latest_definition()
+    definition["targets"]["cursor"]["path"] = "cursor-plugin"
+    write_external(hub, definition)
+    resolve_external_plugins(hub)
+    build_hub(hub)
+    previous = shutil.copytree(hub, tmp_path / "previous")
+    (upstream / "cursor-plugin/skills/example/SKILL.md").write_text("# Updated Cursor skill\n")
+    new_sha = commit_upstream(upstream)
+
+    result = resolve_external_plugins(hub, previous_release_root=previous)
+
+    assert result.retained_updates == []
+    assert {record["sha"] for record in result.verified_plugins} == {new_sha}
+
+
+def test_retaining_one_plugin_does_not_hold_back_another_plugin_from_the_same_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream, hub = tmp_path / "upstream", init_hub(tmp_path / "hub", org="Promptless")
+    make_upstream(upstream, monkeypatch)
+    shutil.copytree(upstream / PLUGIN_PATH, upstream / "other-plugin")
+    for target in ("claude", "codex", "cursor"):
+        manifest = upstream / f"other-plugin/.{target}-plugin/plugin.json"
+        data = json.loads(manifest.read_text())
+        data["name"] = "other-plugin"
+        manifest.write_text(json.dumps(data))
+    sha = commit_upstream(upstream)
+    write_external(hub, latest_definition())
+    definition = {**latest_definition(path="other-plugin"), "id": "other-plugin"}
+    (hub / "plugins/other-plugin.yaml").write_text(yaml.safe_dump(definition))
+    config = yaml.safe_load((hub / "hub.yaml").read_text())
+    config["stable_plugins"].append("other-plugin")
+    (hub / "hub.yaml").write_text(yaml.safe_dump(config))
+    resolve_external_plugins(hub)
+    build_hub(hub)
+    previous = shutil.copytree(hub, tmp_path / "previous")
+    (upstream / PLUGIN_PATH / "skills/example/SKILL.md").write_text("# Updated skill\n")
+    new_sha = advance_upstream(upstream, path="other-plugin")
+
+    result = resolve_external_plugins(hub, previous_release_root=previous)
+
+    assert [update.plugin_id for update in result.retained_updates] == ["doc-detective"]
+    pins = {record["id"]: record["sha"] for record in result.verified_plugins}
+    assert pins == {"doc-detective": sha, "other-plugin": new_sha}
+    lock = json.loads((hub / EXTERNAL_LOCK_PATH).read_text())
+    assert {key: source["sha"] for key, source in lock["plugins"].items()} == pins
+
+
+@pytest.mark.parametrize("change", ["path", "target", "enabled-target"])
+def test_latest_retention_cannot_override_a_target_configuration_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    upstream, hub = tmp_path / "upstream", init_hub(tmp_path / "hub", org="Promptless")
+    make_upstream(upstream, monkeypatch)
+    write_external(hub, latest_definition())
+    resolve_external_plugins(hub)
+    build_hub(hub)
+    previous = shutil.copytree(hub, tmp_path / "previous")
+    lock = (hub / EXTERNAL_LOCK_PATH).read_bytes()
+    (upstream / PLUGIN_PATH / "skills/example/SKILL.md").write_text("# Updated skill\n")
+    definition = latest_definition()
+    if change == "path":
+        shutil.copytree(upstream / PLUGIN_PATH, upstream / "new-path")
+        definition["targets"]["claude"]["path"] = "new-path"
+    elif change == "target":
+        del definition["targets"]["cursor"]
+    else:
+        config = yaml.safe_load((hub / "hub.yaml").read_text())
+        config["targets"].remove("cursor")
+        (hub / "hub.yaml").write_text(yaml.safe_dump(config))
+    write_external(hub, definition)
+    commit_upstream(upstream)
+
+    with pytest.raises(InstructionHubError, match="retains upstream version"):
+        resolve_external_plugins(hub, previous_release_root=previous)
+    assert (hub / EXTERNAL_LOCK_PATH).read_bytes() == lock
+
+
+def test_publish_continues_with_authored_changes_and_resumes_after_upstream_version_bump(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream = tmp_path / "upstream"
+    sha = make_upstream(upstream, monkeypatch)
+    repo = _init_action_repo(tmp_path / "publisher", targets=("claude", "codex", "cursor"))
+    _configure_split_plugin_hub(repo, ("claude", "codex", "cursor"))
+    write_external(repo, latest_definition())
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "follow upstream alongside authored plugins")
+    _git(repo, "push")
+    initial = _run_action(repo, tmp_path / "output")
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    (upstream / PLUGIN_PATH / "skills/example/SKILL.md").write_text("# Updated upstream skill\n")
+    commit_upstream(upstream)
+    authored_skill = "assets/skills/authoring-tools/SKILL.md"
+    (repo / authored_skill).write_text("# Updated authored skill\n")
+    _git(repo, "add", authored_skill)
+    _git(repo, "commit", "-m", "update authored skill")
+    _git(repo, "push")
+
+    def publish(expected_sha: str, version: str) -> None:
+        result = _run_action(repo, tmp_path / "output")
+        assert result.returncode == 0, result.stdout + result.stderr
+        _git(repo, "fetch", "origin")
+        for branch in ("main", "release/stable"):
+            for marketplace in (".claude-plugin", ".agents/plugins", ".cursor-plugin"):
+                entries = json.loads(_git_output(repo, "show", f"origin/{branch}:{marketplace}/marketplace.json"))
+                entry = next(plugin for plugin in entries["plugins"] if plugin["name"] == "doc-detective")
+                assert entry["source"]["sha"] == expected_sha
+            lock = json.loads(_git_output(repo, "show", f"origin/{branch}:{EXTERNAL_LOCK_PATH}"))
+            assert lock["plugins"]["doc-detective"]["sha"] == expected_sha
+        release = json.loads(_git_output(repo, "show", "origin/release/stable:hub.release.json"))
+        assert release["version"] == version
+        external = next(plugin for plugin in release["version_basis"]["plugins"] if plugin["id"] == "doc-detective")
+        assert external["source"]["sha"] == expected_sha
+        verification = json.loads(_git_output(repo, "show", "origin/release/stable:hub.external.json"))
+        assert {record["sha"] for record in verification["verified_external_plugins"]} == {expected_sha}
+        assert (
+            _git_output(repo, "show", "origin/release/stable:dist/claude/dev/skills/authoring-tools/SKILL.md")
+            == "# Updated authored skill\n"
+        )
+        assert _git_output(repo, "status", "--short") == ""
+
+    publish(sha, "0.1.1")
+    branches = _git_output(repo, "ls-remote", "origin", "refs/heads/main", "refs/heads/release/stable")
+    publish(sha, "0.1.1")
+    assert _git_output(repo, "ls-remote", "origin", "refs/heads/main", "refs/heads/release/stable") == branches
+    new_sha = advance_upstream(upstream)
+    publish(new_sha, "0.1.2")
+
+
+@pytest.mark.parametrize("failure", ["missing-manifest", "unavailable"])
 def test_failed_latest_refresh_preserves_lock_and_published_branches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
@@ -211,18 +420,13 @@ def test_failed_latest_refresh_preserves_lock_and_published_branches(
     branches = _git_output(repo, "ls-remote", "origin", "refs/heads/main", "refs/heads/release/stable")
     if failure == "unavailable":
         shutil.rmtree(upstream)
-    elif failure == "same-version":
-        (upstream / PLUGIN_PATH / "skills/example/SKILL.md").write_text("# New behavior\n")
-        commit_upstream(upstream)
     else:
-        advance_upstream(upstream)
         (upstream / PLUGIN_PATH / ".cursor-plugin/plugin.json").unlink()
         commit_upstream(upstream)
     failed = _run_action(repo, tmp_path / "output")
     assert failed.returncode != 0
     expected = {
         "unavailable": "cannot fetch external plugin revision HEAD",
-        "same-version": "retains upstream version 1.2.3",
         "missing-manifest": "missing upstream manifest",
     }
     assert expected[failure] in failed.stderr
