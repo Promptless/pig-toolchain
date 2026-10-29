@@ -212,11 +212,12 @@ jobs:
           go-version: "1.27.3"
           cache-dependency-path: host-runtime/go.sum
       - run: uv sync --frozen
-      - name: Go tests and static checks
+      - name: Go tests
         working-directory: host-runtime
-        run: |
-          go test ./...
-          go vet ./...
+        run: go test ./...
+      - name: Go static checks
+        working-directory: host-runtime
+        run: go vet ./...
       - name: Go race checks and formatting
         if: runner.os != 'Windows'
         working-directory: host-runtime
