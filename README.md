@@ -723,6 +723,53 @@ Scripts execute in the adapter's process, so cancellation signals reach their
 handlers directly. The adapter does not retry commands, start background workers, or infer recovery
 policy; those decisions belong to the hook script.
 
+### Portable hook lifetime
+
+Generated commands pin a SHA-256 manifest covering the Python adapter, execution
+boundary, hook declaration, every authored file, and native runtime binaries.
+The Go runtime manages retention and verification. A short shell bootstrap selects
+the retained executable or the plugin copy on first use; no Python source is
+embedded in the command. Each bundle keeps its exact runtime, independently of
+the managed trace runtime's shared launcher. A generated SessionStart handler prepares a
+private, complete copy without executing authored code. The first ordinary hook
+invocation also prepares the copy if needed. Files are verified before an atomic
+directory rename makes the bundle available; concurrent preparations can share
+only a verified copy of the same digest.
+
+Portable hooks include the native runtime even when telemetry is disabled.
+Preparation does not enroll the host or collect traces. Python 3.9 or newer is
+needed only when executing authored hooks. On Unix the Go process replaces itself
+with isolated Python, preserving the process ID and direct cancellation delivery.
+Codex also gets a PowerShell command for Windows; Claude uses Bash. Cursor
+portable declarations retain their existing POSIX shell requirement.
+
+Retained bundles live under `$XDG_DATA_HOME/promptless/hook-runtime/v1`, defaulting
+to `~/.local/share/promptless/hook-runtime/v1`. Set `PROMPTLESS_HOOK_DATA_HOME` to
+override the base directory with an absolute path (the launcher appends `v1`). This store is independent
+of each host's disposable plugin cache. A loaded command keeps using its exact
+bundle after updates, rollback, or same-version replacement. It never follows a
+"latest" pointer or loads code from a sibling plugin version. Hook dependencies
+must be inside the authored bundle and located relative to `__file__`; the working
+directory and host plugin-root environment variables retain their host meanings.
+Use a separate writable location for hook state, not the retained code directory.
+
+The launcher validates the retained Python and authored files before execution.
+Missing, changed, or unexpected bundle files skip the context hook with a
+nonblocking diagnostic, emitted once until the bundle becomes usable again.
+No hook input or output is persisted by the launcher. If the plugin disappears
+before either preparation or the first invocation, the bootstrap reports an
+unavailable runtime on each invocation and skips the hook. The native executable
+and installed Python interpreter are the trusted bootstrap for these checks.
+
+There is no automatic eviction: an idle or resumable session may still reference
+any retained digest. Remove retained bundles only after closing sessions that
+could use them, including sessions you intend to resume with old registrations.
+Safe automated cleanup requires host-provided lifetime/lease information; an
+age-only cleanup would recreate the update race. This retention applies to
+portable declarations, not authored native JSON or managed trace-runtime hooks.
+Existing sessions need a host reload or restart to load these commands initially;
+installing an update cannot replace commands already held in host memory.
+
 ### Native JSON escape hatch
 
 For other events, runtimes, or host features, keep `hooks.<target>.json` and shared

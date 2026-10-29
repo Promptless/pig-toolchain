@@ -118,7 +118,7 @@ def resolve_native_bundle() -> Path:
             f"Native runtime release native-{source_hash} is unavailable or invalid ({exc}). "
             "Use a released toolchain with matching native artifacts, or build local artifacts with "
             "scripts/build_native_runtime.py and set PIG_NATIVE_RUNTIME_DIR. "
-            "The native-runtime release workflow must run before this source revision can publish telemetry plugins."
+            "The native-runtime release workflow must run before this source revision can publish plugins that include native runtimes."
         ) from exc
     return cache
 

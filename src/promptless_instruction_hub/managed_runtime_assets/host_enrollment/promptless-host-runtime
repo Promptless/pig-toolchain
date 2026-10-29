@@ -1,10 +1,19 @@
 #!/bin/sh
 # Only platform dispatch belongs in the launcher; all runtime logic is Go.
 set -eu
+dispatch_runtime() {
+  runtime_binary=$1
+  shift
+  if [ "${1:-}" = hook ] && [ ! -x "$runtime_binary" ]; then
+    printf '%s\n' 'Instruction Hub context hook skipped: runtime unavailable.' >&2
+    exit 0
+  fi
+  exec "$runtime_binary" "$@"
+}
 case "$(/usr/bin/uname -s)" in
   Darwin) runtime_os=darwin ;;
   Linux) runtime_os=linux ;;
-  MINGW*|MSYS*|CYGWIN*) exec "${0%/*}/promptless-host-runtime.exe" "$@" ;;
+  MINGW*|MSYS*|CYGWIN*) dispatch_runtime "${0%/*}/promptless-host-runtime.exe" "$@" ;;
   *) echo 'Unsupported Promptless runtime operating system' >&2; exit 1 ;;
 esac
 case "$(/usr/bin/uname -m)" in
@@ -12,4 +21,4 @@ case "$(/usr/bin/uname -m)" in
   aarch64|arm64) runtime_arch=arm64 ;;
   *) echo 'Unsupported Promptless runtime architecture' >&2; exit 1 ;;
 esac
-exec "${0%/*}/native/$runtime_os-$runtime_arch/promptless-host-runtime" "$@"
+dispatch_runtime "${0%/*}/native/$runtime_os-$runtime_arch/promptless-host-runtime" "$@"

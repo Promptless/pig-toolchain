@@ -14,6 +14,7 @@ jobs:
     uses: ./.github/workflows/pr-check.yml
     with:
       hub-root: tests/fixtures/hooks-hub
+      build-native-runtime: true
       test-command: python -m unittest discover -s tests -v
       test-runs-on: macos-latest
       test-python-version: "3.9"
@@ -165,6 +166,11 @@ jobs:
           --dist dist
           --uv "$(command -v uv)"
 
+      - name: Smoke test retained generated hooks on Python 3.9
+        env:
+          HOOK_TEST_PYTHON: ${{ steps.runtime-python.outputs.python-path }}
+        run: uv run pytest tests/instruction_hub/test_hook_bundles.py -q
+
       - name: Smoke test portable hook adapter on Python 3.9
         env:
           RUNTIME_PYTHON: ${{ steps.runtime-python.outputs.python-path }}
@@ -221,3 +227,5 @@ jobs:
       - run: uv run python scripts/build_native_runtime.py --output .native-runtime --host
       - name: Execute generated native plugins without interpreters on PATH
         run: uv run python scripts/ci_managed_runtime_smoke.py platform
+      - name: Exercise generated portable hook commands
+        run: uv run pytest tests/instruction_hub/test_hook_bundles.py -q

@@ -167,6 +167,9 @@ func detachedCommand(args []string) []string {
 
 // Main keeps stdout restricted to one host control object or command response.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "hook" {
+		return portableHookMain(args[1:], stderr)
+	}
 	name, o, err := parseCommand(args, stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0

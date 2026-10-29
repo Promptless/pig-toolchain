@@ -1,4 +1,4 @@
-"""Python 3.9+ launcher embedded in hook commands, independent of plugin files.
+"""Python 3.9+ execution boundary retained with each portable hook bundle.
 
 Portable hooks provide context, not policy decisions. Isolate their failures
 here so Python's missing-script exit code 2 cannot become a native hook veto.
@@ -12,6 +12,9 @@ import sys
 
 
 def main() -> None:
+    if sys.version_info < (3, 9):
+        print("Instruction Hub hooks require Python 3.9 or newer.", file=sys.stderr)
+        return
     sys.dont_write_bytecode = True
     runner, *arguments = sys.argv[1:]
     sys.argv = [runner, *arguments]
