@@ -57,7 +57,7 @@ func createDeviceEnrollment(c EnrollmentContext) (*EnrollmentSession, error) {
 	response, err := requestJSONRedirects("POST", api+"/v1/instruction-hub/host-enrollments/device-sessions", nil, object{
 		"deployment_instance_id": c.DeploymentID, "target": c.Metadata.Target,
 		"plugin_id": c.Metadata.PluginID, "plugin_version": c.Metadata.PluginVersion,
-		"package_id": c.Metadata.PackageID, "bootstrap_version": c.Metadata.BootstrapVersion,
+		"bootstrap_version": c.Metadata.BootstrapVersion,
 		"toolchain_version": c.Metadata.ToolchainVersion, "host_instance_id": c.HostID,
 		"host_label": c.Label, "host_platform": c.Platform,
 	}, false)

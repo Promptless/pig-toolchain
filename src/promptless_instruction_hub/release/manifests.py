@@ -27,15 +27,7 @@ def build_release_manifest(
 
     target_hashes = build_target_hashes(output_root, validation)
     base_manifest: dict[str, JsonValue] = {
-        "schema_version": 4
-        if validation.config.mcp.enabled
-        else (
-            3
-            if any(
-                isinstance(plugin.definition, ResolvedExternalPluginDefinition) for plugin in validation.stable_plugins
-            )
-            else 2
-        ),
+        "schema_version": 5,
         "org": validation.config.org,
         "version": validation.config.version,
         "marketplace": {

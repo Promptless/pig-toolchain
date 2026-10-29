@@ -146,7 +146,7 @@ def test_release_determinism_verification_and_version_basis(hub: Path, tmp_path:
     assert _snapshot_tree(hub) == snapshot
     assert build_hub(hub, check=True).release_hash == verified.release_hash
     manifest = json.loads((hub / "hub.release.json").read_text())
-    assert manifest["schema_version"] == 4
+    assert manifest["schema_version"] == 5
     assert manifest["mcp_bundle"] == manifest["version_basis"]["mcp_bundle"]
     jsonschema.validate(manifest, json.loads((SCHEMAS / "release-manifest.schema.json").read_text()))
     assert read_release_manifest(hub / "hub.release.json")[0] == "0.1.0"
@@ -170,7 +170,7 @@ def test_opt_in_transition_and_disable_remove_bundle(tmp_path: Path) -> None:
     init_hub(root, org="Acme")
     build_hub(root)
     old = json.loads((root / "hub.release.json").read_text())
-    assert old["schema_version"] == 2 and "mcp_bundle" not in old
+    assert old["schema_version"] == 5 and "mcp_bundle" not in old
     assert not (root / "dist/mcp").exists()
     previous = tmp_path / "previous"
     shutil.copytree(root, previous)
@@ -244,7 +244,7 @@ def test_external_plugins_preserve_pins_without_fetching(hub: Path, monkeypatch:
     build_hub(hub)
     assert read_release_manifest(hub / "hub.release.json")[0] == "0.1.0"
     manifest = json.loads((hub / "hub.release.json").read_text())
-    assert manifest["schema_version"] == 4
+    assert manifest["schema_version"] == 5
     jsonschema.validate(manifest, json.loads((SCHEMAS / "release-manifest.schema.json").read_text()))
     catalog = Catalog(hub / "dist/mcp", {"doc-detective"})
     plugin = next(plugin for plugin in catalog.manifest.plugins if plugin.kind == "external")

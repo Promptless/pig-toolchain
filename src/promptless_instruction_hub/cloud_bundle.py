@@ -61,7 +61,6 @@ def build_cloud_bundle(output: Path, *, worker_url: str, provider: str, integrat
                     id=HOST_RUNTIME_ID,
                     status="included",
                     target="claude",
-                    package_id=CLOUD_PLUGIN_ID,
                     plugin_id=CLOUD_PLUGIN_ID,
                     plugin_name="PIG Cloud Capture",
                     plugin_version=CLOUD_PLUGIN_VERSION,

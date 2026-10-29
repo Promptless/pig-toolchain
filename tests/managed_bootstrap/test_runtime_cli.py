@@ -60,7 +60,7 @@ def test_host_runtime_requires_subcommand_and_reports_version(tmp_path: Path) ->
     )
     assert payload["id"] == "host-runtime"
     assert payload["name"] == HOST_RUNTIME_BIN
-    assert payload["version"] == "0.4.0"
+    assert payload["version"] == "0.5.0"
     assert payload["channel"] == "stable"
     manifest = json.loads((plugin_root / "hub.managed-runtimes.json").read_text())
     bundle_sha256 = _runtime_bundle_sha256(plugin_root / "runtime")

@@ -76,7 +76,7 @@ def verify_runtime(plugin: Path, workspace: Path) -> None:
 
     version = invoke("version", "--json")
     assert version["sha256"] in files.values()
-    assert version["version"] == record["version"] == "0.4.0"
+    assert version["version"] == record["version"] == "0.5.0"
     assert version["channel"] == record["channel"]
     status = invoke("status", "--host", "codex")
     assert status["status"] == "ok" and status["runtime"] == version
