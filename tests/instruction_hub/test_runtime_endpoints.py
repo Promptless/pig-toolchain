@@ -22,7 +22,7 @@ def _configure_endpoints(hub: Path, **endpoints: JsonValue) -> None:
     write_yaml(hub / "hub.yaml", config)
 
 
-@pytest.mark.parametrize("field", ["worker_base_url", "dashboard_base_url"])
+@pytest.mark.parametrize("field", ["worker_base_url", "dashboard_base_url", "hosted_api_base_url"])
 @pytest.mark.parametrize(
     "value",
     [
@@ -110,7 +110,7 @@ def test_build_packages_only_public_config_for_supported_runtimes(
             assert b"plihost_do_not_package" not in contents
 
 
-@pytest.mark.parametrize("field", ["worker_base_url", "dashboard_base_url"])
+@pytest.mark.parametrize("field", ["worker_base_url", "dashboard_base_url", "hosted_api_base_url"])
 def test_endpoint_change_changes_compiled_hash_and_publish_version(tmp_path: Path, field: str) -> None:
     hub = tmp_path / "hub"
     init_hub(hub, org="Acme")

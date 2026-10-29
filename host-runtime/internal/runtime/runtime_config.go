@@ -45,7 +45,7 @@ func parseRuntimeConfig(data []byte) (map[string]string, error) {
 			if value != json.Number("1") {
 				return nil, errors.New("requires schema_version 1")
 			}
-		case "worker_base_url", "dashboard_base_url":
+		case "worker_base_url", "dashboard_base_url", "hosted_api_base_url":
 			raw, ok := value.(string)
 			u, err := validateURL(raw, false)
 			if !ok || !httpsOriginPattern.MatchString(raw) || err != nil || u.Scheme != "https" || (u.Path != "" && u.Path != "/") {

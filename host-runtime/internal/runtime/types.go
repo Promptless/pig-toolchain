@@ -71,6 +71,8 @@ type EnrollmentContext struct {
 	Metadata                                                 Metadata
 }
 type EnrollmentSession struct {
+	HostedAPI    string    `json:"hosted_api_base_url,omitempty"`
+	ApprovalURL  string    `json:"approval_url,omitempty"`
 	ID           string    `json:"session_id"`
 	DeploymentID string    `json:"deployment_instance_id"`
 	DeviceCode   string    `json:"device_code"`

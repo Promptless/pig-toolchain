@@ -103,6 +103,10 @@ func workerRequestError(endpoint *url.URL, err error) error {
 }
 
 func requestJSON(method, endpoint string, credential *Credential, body any) (object, error) {
+	return requestJSONRedirects(method, endpoint, credential, body, true)
+}
+
+func requestJSONRedirects(method, endpoint string, credential *Credential, body any, redirects bool) (object, error) {
 	u, err := validateURL(endpoint, true)
 	if err != nil {
 		return nil, err
@@ -135,8 +139,8 @@ func requestJSON(method, endpoint string, credential *Credential, body any) (obj
 		}
 	}
 	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(next *http.Request, via []*http.Request) error {
-		if cloud {
-			return errors.New("cloud worker redirects are forbidden")
+		if cloud || !redirects {
+			return errors.New("credential exchange redirects are forbidden")
 		}
 		if len(via) >= 10 {
 			return errors.New("too many redirects")

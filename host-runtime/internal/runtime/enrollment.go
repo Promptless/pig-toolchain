@@ -123,7 +123,16 @@ func sessionFromState(c EnrollmentContext, s object) (*EnrollmentSession, error)
 	b, _ := json.Marshal(v)
 	var session EnrollmentSession
 	if json.Unmarshal(b, &session) != nil {
+		if _, device := v["hosted_api_base_url"]; device || v["approval_url"] != nil {
+			return nil, errors.New("malformed pending device enrollment; reset host enrollment before retrying")
+		}
 		return nil, nil
+	}
+	// A damaged device record must never fall back to browser polling rules.
+	if _, api := v["hosted_api_base_url"]; api || v["approval_url"] != nil {
+		if err := validateDeviceSession(c, session); err != nil {
+			return nil, err
+		}
 	}
 	if !session.ExpiresAt.After(time.Now()) || session.ID == "" || session.DeviceCode == "" || session.DeploymentID != c.DeploymentID || session.PollURL == "" || session.PollInterval < 1 || session.PollInterval > 30 {
 		return nil, nil
@@ -187,13 +196,16 @@ func obtainCredential(c EnrollmentContext, out *output, quiet bool) (*Credential
 	return enrollCredential(c, out, quiet)
 }
 func enrollCredential(c EnrollmentContext, out *output, quiet bool) (*Credential, string, error) {
-	session, err := pendingSession(c)
-	if err != nil {
-		return nil, "", err
+	return enrollMode(c, out, quiet, false)
+}
+func cachedOrEnroll(c EnrollmentContext, out *output, quiet, device bool) (*Credential, string, error) {
+	credential, err := cachedCredential(c)
+	if credential != nil || err != nil {
+		return credential, "", err
 	}
-	if session != nil {
-		return pollEnrollment(c, *session)
-	}
+	return enrollMode(c, out, quiet, device)
+}
+func enrollMode(c EnrollmentContext, out *output, quiet, device bool) (*Credential, string, error) {
 	l, err := acquireLock(filepath.Join(filepath.Dir(statePath()), "host-enrollment-"+c.cacheKey()+".enroll.lock"), time.Time{}, false)
 	if err != nil {
 		return nil, "", err
@@ -207,14 +219,18 @@ func enrollCredential(c EnrollmentContext, out *output, quiet bool) (*Credential
 	if credential != nil || err != nil {
 		return credential, "", err
 	}
-	session, err = pendingSession(c)
+	session, err := pendingSession(c)
 	if err != nil {
 		return nil, "", err
 	}
 	if session == nil {
-		out.emit(object{"status": "browser_enrollment_starting", "host": c.Metadata.Target}, quiet)
 		var reason string
-		session, reason, err = createEnrollment(c)
+		if device {
+			session, err = createDeviceEnrollment(c)
+		} else {
+			out.emit(object{"status": "browser_enrollment_starting", "host": c.Metadata.Target}, quiet)
+			session, reason, err = createEnrollment(c)
+		}
 		if err != nil || session == nil {
 			return nil, reason, err
 		}
@@ -223,12 +239,20 @@ func enrollCredential(c EnrollmentContext, out *output, quiet bool) (*Credential
 			return nil, "", err
 		}
 	}
+	if device && session.ApprovalURL != "" {
+		fmt.Fprintf(out.stderr, "Open this link on a device with a browser to approve this host:\n%s\nApproval expires at %s. Run this command again to resume if approval is still pending.\n", session.ApprovalURL, session.ExpiresAt.Format(time.RFC3339))
+	}
 	return pollEnrollment(c, *session)
 }
 func pollEnrollment(c EnrollmentContext, s EnrollmentSession) (*Credential, string, error) {
-	deadline := time.Now().Add(35 * time.Second)
+	return pollEnrollmentUntil(c, s, time.Now().Add(35*time.Second))
+}
+func pollEnrollmentUntil(c EnrollmentContext, s EnrollmentSession, deadline time.Time) (*Credential, string, error) {
 	for {
-		response, err := requestJSON("POST", s.PollURL, nil, object{"device_code": s.DeviceCode})
+		if !s.ExpiresAt.After(time.Now()) {
+			return nil, "approval_expired", forgetSession(c)
+		}
+		response, err := requestJSONRedirects("POST", s.PollURL, nil, object{"device_code": s.DeviceCode}, s.HostedAPI == "")
 		if err != nil {
 			return nil, "", err
 		}
@@ -253,7 +277,7 @@ func pollEnrollment(c EnrollmentContext, s EnrollmentSession) (*Credential, stri
 			if remaining <= 0 {
 				return nil, "approval_pending", nil
 			}
-			time.Sleep(min(remaining, time.Duration(s.PollInterval)*time.Second))
+			time.Sleep(max(0, min(remaining, time.Until(s.ExpiresAt), time.Duration(s.PollInterval)*time.Second)))
 		default:
 			return nil, "", errors.New("host enrollment poll response has invalid status")
 		}
