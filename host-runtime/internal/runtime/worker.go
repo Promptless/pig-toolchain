@@ -223,7 +223,15 @@ func validatePolicy(payload object, host Host) (Policy, error) {
 		}
 	}
 	// Policy is authenticated by the approved credential and HTTPS transport.
-	return Policy{v, str(p["required_bootstrap_version"])}, nil
+	contextVersion := int64(0)
+	if raw, exists := p["trace_context_manifest_version"]; exists {
+		var valid bool
+		contextVersion, valid = integer(raw)
+		if !valid || contextVersion != 1 {
+			return Policy{}, errors.New("unsupported trace_context_manifest_version")
+		}
+	}
+	return Policy{Version: v, RequiredVersion: str(p["required_bootstrap_version"]), ContextVersion: contextVersion}, nil
 }
 func internalIdentity(payload object) bool {
 	if payload["is_internal_promptless_user"] == true {

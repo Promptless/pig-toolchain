@@ -1053,6 +1053,20 @@ requests target 6 MiB and never exceed 10 MiB; sizing includes chunks and reques
 metadata. Each batch carries the currently installed `plugin_version`, which is
 treated as the version associated with every byte in that batch.
 
+When the hosted policy sets `trace_context_manifest_version: 1`, collection also
+uploads a session context manifest and compressed skill bundles from the executing
+plugin's `skills/` directory. This optional upload follows transcript progress;
+rejected context retries without replaying acknowledged transcript bytes. The
+scoped ledger records the manifest hash only after an exact worker acknowledgment.
+Subagent context belongs to its parent session.
+
+Inventory is bounded to 512 skills and 512 inspected entries per skill, 16 MiB per
+file, 32 MiB of source per skill, and 8 MiB of artifact transport per collection.
+Symlinks, secret-looking filenames, and files with secret-looking contents are
+excluded. Collection respects the remaining trace deadline and reports pending
+context separately. The worker must support context artifact counts and accepted
+manifest hashes before enabling the policy.
+
 #### Collection safety
 
 An unseen source starts at byte zero. A known source resumes at its last
