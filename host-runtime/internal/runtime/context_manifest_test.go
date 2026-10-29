@@ -77,6 +77,16 @@ func TestContextArtifactContentAndExclusions(t *testing.T) {
 	mustWrite(t, filepath.Join(skill, "reference.md"), []byte("safe reference"))
 	mustWrite(t, filepath.Join(skill, ".env"), []byte("secret-file"))
 	mustWrite(t, filepath.Join(skill, "bad.md"), []byte(strings.Repeat("padding", 20000)+"\ntoken=abcdefghijklmnopqrstuv1234"))
+	for name, content := range map[string]string{
+		"config.json":  `{"api_key":"abcdefghijklmnopqrstuv1234"}`,
+		"nested.json":  `{"settings":{"token": "abcdefghijklmnopqrstuv1234"}}`,
+		"single.yaml":  "'password': 'abcdefghijklmnopqrstuv1234'",
+		"header.md":    "Authorization: Bearer abcdefghijklmnopqrstuv1234",
+		"basic.md":     "Authorization: Basic dXNlcjpwYXNz",
+		"headers.json": `{"Authorization": "Bearer abcdefghijklmnopqrstuv1234"}`,
+	} {
+		mustWrite(t, filepath.Join(skill, name), []byte(content))
+	}
 	outside := filepath.Join(t.TempDir(), "outside.md")
 	mustWrite(t, outside, []byte("outside-secret"))
 	// Windows CI may lack symlink privileges; content exclusions still run there.

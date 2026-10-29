@@ -52,7 +52,7 @@ func (d *contextDiagnostics) values() []object {
 }
 
 var contextSecretPath = regexp.MustCompile(`(?i)(^\.env(\.|$)|(^|[-_.])(secrets?|credentials?|tokens?|password|passwd|private[-_]?key|api[-_]?key)([-_.]|$)|^(id_rsa|id_ed25519|\.netrc)$)`)
-var contextSecretValue = regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password|authorization|private[_-]?key)\s*[:=]\s*['"]?[A-Za-z0-9._~+/=-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----`)
+var contextSecretValue = regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password|authorization|private[_-]?key)\s*['"]?\s*[:=]\s*['"]?[A-Za-z0-9._~+/=-]{20,}|authorization\s*['"]?\s*[:=]\s*['"]?(bearer|basic)\s+[A-Za-z0-9._~+/=-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----`)
 
 // OpenRoot confines reads even if a plugin changes symlinks while being scanned.
 // Limits bound inspected entries as well as retained payload bytes.
