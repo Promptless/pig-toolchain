@@ -1,0 +1,75 @@
+name: Publish native host runtime
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - host-runtime/**
+      - src/promptless_instruction_hub/managed_runtime_assets/host_enrollment/**
+      - src/promptless_instruction_hub/native_*.py
+      - scripts/build_native_runtime.py
+      - .github/workflows/native-runtime.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: native-runtime-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.3"
+          cache-dependency-path: host-runtime/go.sum
+      - run: uv sync --frozen
+      - name: Validate runtime
+        working-directory: host-runtime
+        run: |
+          go test -race ./...
+          go vet ./...
+      - name: Build all six platform binaries
+        run: uv run python scripts/build_native_runtime.py --output .native-runtime
+      - name: Publish immutable source-matched bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_hash=$(uv run python -c 'from promptless_instruction_hub.native_runtime import runtime_source_sha256; print(runtime_source_sha256())')
+          tag="native-$source_hash"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release download "$tag" --pattern native-runtime.zip --dir existing
+            uv run python - <<'PY'
+          from pathlib import Path
+          from promptless_instruction_hub.native_runtime import extract_bundle, runtime_source_sha256
+          from promptless_instruction_hub.native_manifest import validate_bundle
+          extract_bundle(Path('existing/native-runtime.zip'), Path('existing/bundle'))
+          old = validate_bundle(Path('existing/bundle'), source_sha256=runtime_source_sha256())
+          new = validate_bundle(Path('.native-runtime'), source_sha256=runtime_source_sha256())
+          assert old == new, 'Existing immutable release differs from rebuilt binaries; do not overwrite'
+          PY
+            exit 0
+          fi
+          uv run python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile, ZIP_DEFLATED
+          root = Path('.native-runtime')
+          with ZipFile('native-runtime.zip', 'w', compression=ZIP_DEFLATED) as archive:
+              for path in sorted(root.rglob('*')):
+                  if path.is_file():
+                      archive.write(path, path.relative_to(root).as_posix())
+          PY
+          gh release create "$tag" native-runtime.zip \
+            --target "$GITHUB_SHA" --title "Native host runtime $source_hash" \
+            --notes "Source-matched Go host runtime binaries for macOS, Linux, and Windows (amd64 and arm64). This immutable bundle is resolved automatically by the matching toolchain." \
+            --latest=false

@@ -723,6 +723,53 @@ Scripts execute in the adapter's process, so cancellation signals reach their
 handlers directly. The adapter does not retry commands, start background workers, or infer recovery
 policy; those decisions belong to the hook script.
 
+### Portable hook lifetime
+
+Generated commands pin a SHA-256 manifest covering the Python adapter, execution
+boundary, hook declaration, every authored file, and native runtime binaries.
+The Go runtime manages retention and verification. A short shell bootstrap selects
+the retained executable or the plugin copy on first use; no Python source is
+embedded in the command. Each bundle keeps its exact runtime, independently of
+the managed trace runtime's shared launcher. A generated SessionStart handler prepares a
+private, complete copy without executing authored code. The first ordinary hook
+invocation also prepares the copy if needed. Files are verified before an atomic
+directory rename makes the bundle available; concurrent preparations can share
+only a verified copy of the same digest.
+
+Portable hooks include the native runtime even when telemetry is disabled.
+Preparation does not enroll the host or collect traces. Python 3.9 or newer is
+needed only when executing authored hooks. On Unix the Go process replaces itself
+with isolated Python, preserving the process ID and direct cancellation delivery.
+Codex also gets a PowerShell command for Windows; Claude uses Bash. Cursor
+portable declarations retain their existing POSIX shell requirement.
+
+Retained bundles live under `$XDG_DATA_HOME/promptless/hook-runtime/v1`, defaulting
+to `~/.local/share/promptless/hook-runtime/v1`. Set `PROMPTLESS_HOOK_DATA_HOME` to
+override the base directory with an absolute path (the launcher appends `v1`). This store is independent
+of each host's disposable plugin cache. A loaded command keeps using its exact
+bundle after updates, rollback, or same-version replacement. It never follows a
+"latest" pointer or loads code from a sibling plugin version. Hook dependencies
+must be inside the authored bundle and located relative to `__file__`; the working
+directory and host plugin-root environment variables retain their host meanings.
+Use a separate writable location for hook state, not the retained code directory.
+
+The launcher validates the retained Python and authored files before execution.
+Missing, changed, or unexpected bundle files skip the context hook with a
+nonblocking diagnostic, emitted once until the bundle becomes usable again.
+No hook input or output is persisted by the launcher. If the plugin disappears
+before either preparation or the first invocation, the bootstrap reports an
+unavailable runtime on each invocation and skips the hook. The native executable
+and installed Python interpreter are the trusted bootstrap for these checks.
+
+There is no automatic eviction: an idle or resumable session may still reference
+any retained digest. Remove retained bundles only after closing sessions that
+could use them, including sessions you intend to resume with old registrations.
+Safe automated cleanup requires host-provided lifetime/lease information; an
+age-only cleanup would recreate the update race. This retention applies to
+portable declarations, not authored native JSON or managed trace-runtime hooks.
+Existing sessions need a host reload or restart to load these commands initially;
+installing an update cannot replace commands already held in host memory.
+
 ### Native JSON escape hatch
 
 For other events, runtimes, or host features, keep `hooks.<target>.json` and shared
@@ -821,36 +868,54 @@ for credential setup, deployment requirements, and collection limits.
 When `trace_ingestion.enabled` is true, the toolchain owns Promptless-managed runtime artifacts that are injected into
 the canonical `pig` plugin, including the host runtime used by Codex, Claude,
 and Cursor lifecycle hooks. Other generated plugins receive no toolchain-managed
-runtime or lifecycle hooks. During dogfood, generated Codex hooks wrap the bundled
-stdlib-only Python runtime with POSIX shell checks. The stable executable in
-`runtime/` delegates to private sibling modules that separate CLI dispatch,
-enrollment, trace collection, host configuration, persistence, and output.
-Generated Claude hooks use Claude Code's exec-form hook so Windows installs do
-not need a POSIX shell; Node must be available to start the inline launcher.
-Claude and Codex SessionStart launchers start a detached supervisor that inherits the
-hook input and redirects background output away from the agent transcript. The
-Claude supervisor collects both Claude Code and any detected Claude Desktop
-sources.
-Claude and Codex startup launchers emit schema-safe diagnostics when the host cannot resolve the
-plugin root, a readable managed runtime bundle (the launcher plus its sibling
-package and CLI entry module), or Python 3.9+. Terminal lifecycle launchers stay
-quiet: they resolve a complete runtime bundle under the plugin root, fall back
-to a complete sibling installed version with the same runtime-bundle layout for
-the same plugin id when the recorded root is stale or incomplete, and exit 0
-with no output when no usable bundle exists.
+runtime or lifecycle hooks. Managed runtime 0.4.0 is implemented in Go. Generated
+plugins contain executables for macOS, Linux, and Windows on amd64 and arm64;
+installed managed hooks do not require Python, Node, or Go. The toolchain compiler
+and the adapter for user-authored portable hooks remain Python.
 
-Cursor hooks use a bundled Node launcher with a 250 ms timeout. The foreground
-only accepts bounded identity/path metadata and launches a detached process.
-Interpreter discovery, enrollment, SQLite reads, journaling, and uploads happen
-in the background. Cursor receives no collector output.
+The bundled `runtime/promptless-host-runtime` shell launcher selects the native
+executable. Claude hooks explicitly use Bash, which requires Git Bash on Windows.
+Windows Codex startup and Cursor hooks invoke `runtime/promptless-host-runtime.exe`
+(amd64, with Windows ARM64 emulation); the bundle also includes an explicit
+native ARM64 executable. Claude and Codex
+SessionStart launch detached supervisors with closed output pipes. The Claude
+supervisor collects both Claude Code and detected Claude Desktop sources.
+Claude and Codex startup also install a private launcher under
+`~/.promptless/instruction-hub/bin/`. Their terminal hooks call that launcher
+directly, without inline shell programs or interpreter discovery:
 
 ```sh
-sh -c 'root=${PLUGIN_ROOT:-}; ...; find python3/python/py; run promptless-host-runtime session-start --host codex --detach'
-sh -c 'root=${PLUGIN_ROOT:-}; ...; find same-plugin sibling runtime if needed; run promptless-host-runtime collect --host codex --lifecycle stop --detach --quiet'
-sh -c 'root=${PLUGIN_ROOT:-}; ...; find same-plugin sibling runtime if needed; run promptless-host-runtime collect --host codex --lifecycle session_end --detach --quiet'
-node -e '... resolve ${CLAUDE_PLUGIN_ROOT}; find Python 3.9+; run promptless-host-runtime session-start --host claude --detach' '${CLAUDE_PLUGIN_ROOT}'
-node -e '... resolve ${CLAUDE_PLUGIN_ROOT}; find same-plugin sibling runtime if needed; run promptless-host-runtime collect --host claude --lifecycle session_end --detach --quiet' '${CLAUDE_PLUGIN_ROOT}'
+"$HOME/.promptless/instruction-hub/bin/promptless-host-runtime" collect --host codex --lifecycle session_end --detach --quiet
 ```
+
+The launcher selects an immutable executable copy under
+`~/.promptless/instruction-hub/runtime/`. Installation is locked and atomic;
+Windows updates switch a batch launcher instead of replacing a running `.exe`.
+Plugin metadata is saved per original plugin path so terminal hooks retain the
+session's plugin identity even after an update removes its entire cache entry.
+Startup must succeed once to install the launcher. Installation failures are
+reported through hook output and durable diagnostics. Runtime copies are retained
+across updates so running processes remain valid; removing the plugin cache does
+not remove these private copies.
+
+Cursor uses a shell/batch launcher and the Go `cursor-notify` command. The
+foreground accepts only bounded identity/path metadata, waits at most 200 ms
+for stdin, and launches a detached collector. Enrollment, SQLite reads,
+journaling, and uploads run in the background. Startup hooks have a 30-second
+host timeout; terminal hooks have a 3-second timeout. These are host allowances,
+not expected foreground latency. Cursor receives no collector output.
+
+The compiler resolves immutable native release bundles by a hash of the Go
+sources, dependency lock, launchers, and pinned build recipe. It validates the
+complete platform inventory and every file digest before caching or copying a
+release. `hub.managed-runtimes.json` identifies the complete bundle; the runtime's
+`version --json` identifies the executing platform binary. The native release
+workflow must publish the source-matched bundle before this toolchain revision
+can build telemetry-enabled hubs without a local build override.
+
+For development, see [the native runtime guide](host-runtime/README.md). Existing
+enrollment state, credentials, Cursor journals, and upload ledgers retain their
+paths and formats across the migration.
 
 The dogfood host runtime uses `PROMPTLESS_WORKER_BASE_URL` or the default
 production worker. It reads the worker's public `/healthz` identity, opens the

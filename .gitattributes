@@ -1,0 +1,2 @@
+host-runtime/** text eol=lf
+src/promptless_instruction_hub/managed_runtime_assets/host_enrollment/** text eol=lf

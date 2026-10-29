@@ -15,9 +15,6 @@ from tests.config_helpers import enable_trace_ingestion
 
 from promptless_instruction_hub.compiler import build_hub, init_hub
 from promptless_instruction_hub.fs import validate_json_value
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.contracts import (
-    TARGET_TRANSPORT_BATCH_BYTES,
-)
 
 from .helpers import (
     _FakeWorkerServer,
@@ -30,6 +27,9 @@ from .helpers import (
     _run_runtime_json,
     _scoped_ledger_path_for_test,
 )
+
+
+TARGET_TRANSPORT_BATCH_BYTES = 6 * 1024 * 1024  # Serialized upload request target.
 
 
 def _seed_ledger_offsets(ledger_path: Path, *source_paths: Path) -> None:
@@ -117,7 +117,7 @@ def test_collect_uploads_full_transcript_then_only_new_ranges(tmp_path: Path) ->
         assert batch["host"] == "codex"
         assert batch["session_id"] == "codex_session_1"
         assert batch["policy_version"] == 1
-        assert batch["collector_version"] == "0.3.0"
+        assert batch["collector_version"] == "0.4.0"
         chunks = _json_list(batch["chunks"], "batch.chunks")
         # contiguous complete lines coalesce into one contract-shaped range chunk
         assert len(chunks) == 1

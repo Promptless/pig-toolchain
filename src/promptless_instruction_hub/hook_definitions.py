@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-import shlex
-from pathlib import Path
-
-from promptless_instruction_hub import hook_launcher
 from promptless_instruction_hub.errors import InstructionHubError
 from promptless_instruction_hub.fs import JsonValue
 from promptless_instruction_hub.hook_runtime import EVENTS
 from promptless_instruction_hub.models import Harness, LoadedAsset
 
-RUNNER_NAME = "_instruction_hub_hook.py"
 PLUGIN_ROOTS = {"claude": "CLAUDE_PLUGIN_ROOT", "codex": "PLUGIN_ROOT", "cursor": "CURSOR_PLUGIN_ROOT"}
 
 
@@ -44,22 +39,12 @@ def validate_hook_definition(asset: LoadedAsset) -> None:
             seen.add(key)
 
 
-def render_hook_definition(asset: LoadedAsset, target: Harness) -> dict[str, JsonValue]:
+def render_hook_definition(asset: LoadedAsset, target: Harness, digest: str) -> dict[str, JsonValue]:
     spec = asset.metadata.hook
     assert spec is not None
-    root = PLUGIN_ROOTS[target]
-    runner = f'"${{{root}}}"/{shlex.quote("hooks/" + RUNNER_NAME)}'
-    entrypoint = f'"${{{root}}}"/{shlex.quote(f"hooks/{asset.id}/{spec.entrypoint}")}'
-    launcher = shlex.quote(Path(hook_launcher.__file__).read_text(encoding="utf-8"))
-    command = (
-        "if command -v python3 >/dev/null 2>&1 "
-        "&& python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))'; then "
-        f"exec python3 -I -c {launcher} {runner} --host {target} --entrypoint {entrypoint}; "
-        "else printf '%s\\n' 'Instruction Hub hooks require Python 3.9 or newer.' >&2; fi"
-    )
     events: dict[str, JsonValue] = {}
     for binding in spec.bindings[target]:
-        action: dict[str, JsonValue] = {"command": command, "timeout": spec.timeout}
+        action: dict[str, JsonValue] = {**_hook_command(target, digest, "run"), "timeout": spec.timeout}
         if target == "cursor":
             entry = action
         else:
@@ -72,4 +57,44 @@ def render_hook_definition(asset: LoadedAsset, target: Harness) -> dict[str, Jso
         handlers = events.setdefault(binding.event, [])
         assert isinstance(handlers, list)
         handlers.append(entry)
+    # Prepare dependencies before the first authored event, without executing it.
+    startup = "sessionStart" if target == "cursor" else "SessionStart"
+    prepare: dict[str, JsonValue] = {**_hook_command(target, digest, "prepare"), "timeout": 10}
+    if target != "cursor":
+        prepare = {"hooks": [{"type": "command", **prepare}]}
+    handlers = events.setdefault(startup, [])
+    assert isinstance(handlers, list)
+    handlers.insert(0, prepare)
     return {"version": 1, "hooks": events} if target == "cursor" else {"hooks": events}
+
+
+def _hook_command(target: Harness, digest: str, operation: str) -> dict[str, JsonValue]:
+    """Bootstrap a pinned executable; all bundle management lives in Go."""
+    root = PLUGIN_ROOTS[target]
+    data = "${PROMPTLESS_HOOK_DATA_HOME:-${XDG_DATA_HOME:-${USERPROFILE:-$HOME}/.local/share}/promptless/hook-runtime}"
+    # The first invocation uses the plugin executable. Subsequent calls use the
+    # exact retained executable even if the source cache has disappeared.
+    command = (
+        f'bundle={digest}; runtime="{data}/v1/bin/$bundle/promptless-host-runtime"; '
+        f'[ -x "$runtime" ] || runtime="${{{root}}}/runtime/promptless-host-runtime"; '
+        f'if [ -x "$runtime" ]; then exec "$runtime" hook {operation} '
+        f'--bundle "$bundle" --source "${{{root}}}/hooks"; '
+        "else printf '%s\\n' 'Instruction Hub context hook skipped: runtime unavailable.' >&2; fi"
+    )
+    result: dict[str, JsonValue] = {"command": command}
+    if target == "claude":
+        result["shell"] = "bash"
+    if target == "codex":
+        result["commandWindows"] = (
+            f"$bundle='{digest}'; "
+            "$data=$env:PROMPTLESS_HOOK_DATA_HOME; if (!$data) { "
+            "$base=$env:XDG_DATA_HOME; if (!$base) { $base=Join-Path $env:USERPROFILE '.local/share' }; "
+            "$data=Join-Path $base 'promptless/hook-runtime' }; "
+            '$runtime=Join-Path $data "v1/bin/$bundle/promptless-host-runtime.exe"; '
+            "if (!(Test-Path -LiteralPath $runtime -PathType Leaf)) { "
+            '$runtime=Join-Path $env:PLUGIN_ROOT "runtime/promptless-host-runtime.exe" }; '
+            "if (Test-Path -LiteralPath $runtime -PathType Leaf) { "
+            f'& $runtime hook {operation} --bundle $bundle --source "$env:PLUGIN_ROOT/hooks"; exit $LASTEXITCODE '
+            '} else { [Console]::Error.WriteLine("Instruction Hub context hook skipped: runtime unavailable.") }'
+        )
+    return result

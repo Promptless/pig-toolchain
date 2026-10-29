@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import zipfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from promptless_instruction_hub.managed_runtime import (
     HOST_RUNTIME_EXECUTABLE,
@@ -18,14 +20,13 @@ from promptless_instruction_hub.managed_runtime import (
     _write_plugin_manifest,
     copy_host_runtime_bundle,
 )
-from promptless_instruction_hub.managed_runtime_assets.host_enrollment.promptless_host_runtime.cloud import CloudConfig
 
 CLOUD_PLUGIN_ID = "pig-cloud-capture"
 CLOUD_PLUGIN_VERSION = "0.1.0"
 
 
 def build_cloud_bundle(output: Path, *, worker_url: str, provider: str, integration_id: str, transport: str) -> Path:
-    """Package headless hooks and a stdlib-only collector without credentials.
+    """Package headless hooks and a Go collector without credentials.
 
     ``transport`` selects a connection-injected grant (``proxy``) or a sandbox
     environment/file grant (``secret``). Invalid public configuration and existing
@@ -51,7 +52,7 @@ def build_cloud_bundle(output: Path, *, worker_url: str, provider: str, integrat
             )
             + "\n"
         )
-        CloudConfig.load(config_path)
+        _validate_cloud_config(worker_url, provider, integration_id, transport)
         copy_host_runtime_bundle(root)
         _write_plugin_manifest(
             root,
@@ -85,7 +86,7 @@ def build_cloud_bundle(output: Path, *, worker_url: str, provider: str, integrat
             )
             + "\n"
         )
-        command = 'python3 "${CLAUDE_PLUGIN_ROOT}/runtime/promptless-host-runtime" cloud-collect --config "${CLAUDE_PLUGIN_ROOT}/cloud-capture.json" --detach'
+        command = '"${CLAUDE_PLUGIN_ROOT}/runtime/promptless-host-runtime" cloud-collect --config "${CLAUDE_PLUGIN_ROOT}/cloud-capture.json" --detach'
         hooks = {
             event: [{"hooks": [{"type": "command", "command": command, "timeout": 3}]}]
             for event in ("SessionStart", "UserPromptSubmit", "Stop", "SubagentStop", "SessionEnd")
@@ -98,3 +99,27 @@ def build_cloud_bundle(output: Path, *, worker_url: str, provider: str, integrat
                 if path.is_file():
                     archive.write(path, path.relative_to(root))
     return output
+
+
+def _validate_cloud_config(worker_url: str, provider: str, integration_id: str, transport: str) -> None:
+    parsed = urlsplit(worker_url.rstrip("/"))
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path
+        or "\\" in worker_url
+        or any(c.isspace() for c in worker_url)
+    ):
+        raise ValueError("Cloud worker URL must be an HTTPS origin without credentials, path, query, or fragment")
+    if parsed.port is not None and not 1 <= parsed.port <= 65535:
+        raise ValueError("Invalid cloud worker port")
+    if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", provider) is None:
+        raise ValueError("Invalid cloud provider")
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,100}", integration_id) is None:
+        raise ValueError("Invalid cloud integration identifier")
+    if transport not in ("proxy", "secret"):
+        raise ValueError("Cloud transport must be proxy or secret")
