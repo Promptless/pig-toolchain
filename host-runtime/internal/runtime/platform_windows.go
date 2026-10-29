@@ -15,6 +15,10 @@ func tryFileLock(f *os.File) (bool, error) {
 		return false, err
 	} else if s.Size() == 0 {
 		if _, err = f.WriteAt([]byte{0}, 0); err != nil {
+			// Another opener may initialize and lock the byte after Stat.
+			if errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
+				return false, nil
+			}
 			return false, err
 		}
 	}
