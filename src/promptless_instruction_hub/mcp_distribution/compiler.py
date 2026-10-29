@@ -26,6 +26,7 @@ from promptless_instruction_hub.mcp_distribution.skill_tools import project_skil
 from promptless_instruction_hub.models import LoadedAsset, ResolvedExternalPluginDefinition, ResolvedHubPluginDefinition
 from promptless_instruction_hub.release.hashing import stable_hash
 from promptless_instruction_hub.validate.hub import ValidationResult
+from promptless_instruction_hub.token_efficiency import compact_markdown
 
 BUNDLE_PATH = Path("dist/mcp")
 MANIFEST_NAME = "bundle.json"
@@ -85,7 +86,12 @@ def render_mcp_bundle(output_root: Path, validation: ValidationResult[ResolvedHu
         )
         for asset in plugin.assets:
             memberships.setdefault(asset.ref, []).append(definition.id)
-    assets = [_compile_asset(root, asset, sorted(memberships[asset.ref])) for asset in validation.stable_assets]
+    assets = [
+        _compile_asset(
+            root, asset, sorted(memberships[asset.ref]), compact=validation.config.token_efficiency.compact_instructions
+        )
+        for asset in validation.stable_assets
+    ]
     project_skill_tools(assets)
     files = [file for asset in assets for file in asset.files]
     if len(files) > MAX_BUNDLE_FILES or sum(file.size for file in files) > MAX_BUNDLE_BYTES:
@@ -112,7 +118,7 @@ def render_mcp_bundle(output_root: Path, validation: ValidationResult[ResolvedHu
         raise InstructionHubError("MCP bundle manifest exceeds 16 MiB")
 
 
-def _compile_asset(root: Path, asset: LoadedAsset, plugins: list[str]) -> BundleAsset:
+def _compile_asset(root: Path, asset: LoadedAsset, plugins: list[str], *, compact: bool = False) -> BundleAsset:
     relative_root = Path("assets") / asset.type / asset.id
     sources = sorted(asset.path.rglob("*")) if asset.path.is_dir() else [asset.path]
     files: list[BundleFile] = []
@@ -124,7 +130,10 @@ def _compile_asset(root: Path, asset: LoadedAsset, plugins: list[str]) -> Bundle
         if not source.is_file():
             raise InstructionHubError(f"{asset.ref}: only regular files can be distributed")
         relative = source.relative_to(asset.path) if asset.path.is_dir() else Path(source.name)
-        files.append(_write_file(root, relative_root / relative, source.read_bytes()))
+        data = source.read_bytes()
+        if compact and asset.type == "skill" and relative.parent == Path(".") and relative.name.lower() == "skill.md":
+            data = compact_markdown(data.decode("utf-8")).encode("utf-8")
+        files.append(_write_file(root, relative_root / relative, data))
     result = BundleAsset(
         ref=asset.ref,
         id=asset.id,
@@ -150,7 +159,7 @@ def _compile_asset(root: Path, asset: LoadedAsset, plugins: list[str]) -> Bundle
             original = entrypoints[0]
             content = (root / original.path).read_bytes()
             frontmatter = read_frontmatter(content)
-            # Normalize filename casing without changing the authored bytes.
+            # Normalize filename casing without further changing the content.
             entrypoint = relative_root / "SKILL.md"
             if original.path != entrypoint.as_posix():
                 (root / original.path).unlink()
@@ -160,7 +169,8 @@ def _compile_asset(root: Path, asset: LoadedAsset, plugins: list[str]) -> Bundle
                 frontmatter=frontmatter, entrypoint=entrypoint.as_posix(), files=sorted(file.path for file in files)
             )
         elif asset.type == "agent":
-            content = render_agent_skill(read_agent_skill(asset)).encode("utf-8")
+            procedure = render_agent_skill(read_agent_skill(asset))
+            content = (compact_markdown(procedure) if compact else procedure).encode("utf-8")
             entrypoint = Path("projections/agent") / asset.id / "SKILL.md"
             result.files.append(_write_file(root, entrypoint, content))
             result.skill = BundleSkill(
@@ -169,7 +179,11 @@ def _compile_asset(root: Path, asset: LoadedAsset, plugins: list[str]) -> Bundle
         elif asset.type == "command":
             # The Codex conversion validates the host-independent, explicit-invocation subset.
             command = read_command(asset, "codex")
-            result.prompt = BundlePrompt(name=f"command:{asset.id}", description=command.description, body=command.body)
+            result.prompt = BundlePrompt(
+                name=f"command:{asset.id}",
+                description=command.description,
+                body=compact_markdown(command.body) if compact else command.body,
+            )
         if result.skill is not None:
             skill_files = [file for file in result.files if file.path in result.skill.files]
             if len(skill_files) > MAX_SKILL_FILES or sum(file.size for file in skill_files) > MAX_SKILL_BYTES:

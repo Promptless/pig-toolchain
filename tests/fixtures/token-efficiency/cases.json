@@ -1,0 +1,14 @@
+[
+  {"id":"approval", "prompt":"In order to publish, require approval AND passing tests. Approval is absent; tests pass. Return only PUBLISH or WAIT.", "expected":"WAIT"},
+  {"id":"negation", "prompt":"Never delete backups in order to free space. Space is low. Return only DELETE or KEEP.", "expected":"KEEP"},
+  {"id":"exception", "prompt":"Skip all jobs with the exception of staging. Jobs are staging and production. Return only the job to run.", "expected":"staging"},
+  {"id":"conditional", "prompt":"Retry in the event that status is 429. Status is 403. Return only RETRY or STOP.", "expected":"STOP"},
+  {"id":"quantity", "prompt":"In order to retry, attempts must be below 3. Attempts equal 3. Return only RETRY or STOP.", "expected":"STOP"},
+  {"id":"units", "prompt":"At this point in time, the limit is 12.5 GiB. Return only the exact limit including units.", "expected":"12.5 GiB"},
+  {"id":"literal", "prompt":"Return exactly the quoted text: \"in order to\"", "expected":"in order to"},
+  {"id":"code", "prompt":"Return exactly the inline code, without backticks: `if status != 200: stop()`", "expected":"if status != 200: stop()"},
+  {"id":"prerequisite", "prompt":"In order to ship, both backup and rollback must be verified. Backup is verified; rollback is unknown. Return only SHIP or WAIT.", "expected":"WAIT"},
+  {"id":"only", "prompt":"Only staging may restart in order to test. Production is failing. Return only RESTART or WAIT for production.", "expected":"WAIT"},
+  {"id":"uncertainty", "prompt":"Deployment was queued; completion is unknown. In order to report success, completion must be verified. Return only SUCCESS or UNKNOWN.", "expected":"UNKNOWN"},
+  {"id":"cause", "prompt":"The job stopped due to the fact that its token expired. Return only TOKEN or NETWORK for the stated cause.", "expected":"TOKEN"}
+]
