@@ -38,12 +38,15 @@ func desktopRoots() []string {
 	base := appConfigRoot("Claude")
 	return []string{filepath.Join(base, "local-agent-mode-sessions"), filepath.Join(base, "claude-code-sessions")}
 }
+func claudeConfigRoot() string {
+	return envPath("CLAUDE_CONFIG_DIR", homePath(".claude"))
+}
 func nativeRoots(h Host) []string {
 	switch h {
 	case Cursor:
 		return []string{filepath.Join(cursorSpool(), "journals")}
 	case Claude:
-		return []string{homePath(".claude", "projects")}
+		return []string{filepath.Join(claudeConfigRoot(), "projects")}
 	case ClaudeDesktop:
 		return desktopRoots()
 	default:
@@ -56,7 +59,7 @@ func configPath(h Host) string {
 	case Codex:
 		return filepath.Join(envPath("CODEX_HOME", homePath(".codex")), "config.toml")
 	case Claude:
-		return filepath.Join(envPath("CLAUDE_CONFIG_DIR", homePath(".claude")), "settings.json")
+		return filepath.Join(claudeConfigRoot(), "settings.json")
 	case Cursor:
 		return cursorDBPath()
 	default:

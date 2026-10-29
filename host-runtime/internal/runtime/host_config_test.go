@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -57,5 +58,77 @@ func TestDesktopDiscoveryRetainsHostAndAgeFilters(t *testing.T) {
 	}
 	if paths, complete := scanSources(ClaudeDesktop, time.Time{}, false); !complete || !reflect.DeepEqual(paths, []string{resolvePath(file)}) {
 		t.Fatalf("audit discovery: %v %v", paths, complete)
+	}
+}
+
+func TestClaudeConfiguredRootDiscoveryAndCleanup(t *testing.T) {
+	for _, override := range []string{"unset", "", "~/Claude [work profile]"} {
+		t.Run(override, func(t *testing.T) {
+			home := privateHome(t)
+			root := filepath.Join(home, ".claude")
+			if override == "unset" {
+				if err := os.Unsetenv("CLAUDE_CONFIG_DIR"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				t.Setenv("CLAUDE_CONFIG_DIR", override)
+				if override != "" {
+					root = filepath.Join(home, "Claude [work profile]")
+				}
+			}
+			dir := filepath.Join(root, "projects", "project")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			transcript := resolvePath(filepath.Join(dir, "session.jsonl"))
+			mustWrite(t, transcript, []byte("configured root\n"))
+			transcript = resolvePath(transcript)
+			settings := filepath.Join(root, "settings.json")
+			mustWrite(t, settings, []byte(`{"env":{"PROMPTLESS_MANAGED_HOST_ENROLLMENT":"1"},"theme":"dark"}`))
+			if override != "unset" && override != "" {
+				decoy := filepath.Join(home, ".claude", "projects", "old")
+				if err := os.MkdirAll(decoy, 0700); err != nil {
+					t.Fatal(err)
+				}
+				mustWrite(t, filepath.Join(decoy, "decoy.jsonl"), []byte("wrong root\n"))
+				mustWrite(t, filepath.Join(home, ".claude", "settings.json"), []byte(`{"theme":"light"}`))
+			}
+			desktop := desktopRoots()
+			worker := newTestWorker(t, false)
+			seedEnrollment(t, worker, Claude)
+			out := &output{stdout: io.Discard, stderr: io.Discard}
+			if err := ensure(Claude, true, false, false, out); err != nil {
+				t.Fatal(err)
+			}
+			status := configStatus(Claude)
+			if status["path"] != settings || status["managed_config_detected"] != false {
+				t.Fatal(status)
+			}
+			data, err := loadState(settings)
+			if err != nil || data["theme"] != "dark" || data["env"] != nil {
+				t.Fatalf("settings=%v err=%v", data, err)
+			}
+			complete, err := collect(Claude, "session_start", HookContext{}, true, true, out)
+			if err != nil || !complete {
+				t.Fatalf("complete=%v err=%v", complete, err)
+			}
+			uploads := worker.at("/v0/traces/batches")
+			if len(uploads) != 1 {
+				t.Fatalf("uploads=%v", uploads)
+			}
+			chunks := uploads[0].Body["chunks"].([]any)
+			if len(chunks) != 1 || obj(chunks[0])["source_path_hash"] != hash([]byte(transcript)) {
+				t.Fatal(chunks)
+			}
+			if !reflect.DeepEqual(desktopRoots(), desktop) {
+				t.Fatal("desktop roots changed")
+			}
+			if override != "unset" && override != "" {
+				decoy, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+				if err != nil || string(decoy) != `{"theme":"light"}` {
+					t.Fatal("default settings changed", err)
+				}
+			}
+		})
 	}
 }
