@@ -341,7 +341,7 @@ func createEnrollment(c EnrollmentContext) (*EnrollmentSession, string, error) {
 	})
 	go func() { _ = server.Serve(listener) }()
 	defer server.Close()
-	q := url.Values{"callback_url": {callback}, "deployment_instance_id": {c.DeploymentID}, "target": {string(c.Metadata.Target)}, "plugin_id": {c.Metadata.PluginID}, "plugin_version": {c.Metadata.PluginVersion}, "package_id": {c.Metadata.PackageID}, "bootstrap_version": {Version}, "toolchain_version": {c.Metadata.ToolchainVersion}, "host_instance_id": {c.HostID}, "host_label": {c.Label}, "host_platform": {c.Platform}, "pending_callback": {"1"}}
+	q := url.Values{"callback_url": {callback}, "deployment_instance_id": {c.DeploymentID}, "target": {string(c.Metadata.Target)}, "plugin_id": {c.Metadata.PluginID}, "plugin_version": {c.Metadata.PluginVersion}, "bootstrap_version": {Version}, "toolchain_version": {c.Metadata.ToolchainVersion}, "host_instance_id": {c.HostID}, "host_label": {c.Label}, "host_platform": {c.Platform}, "pending_callback": {"1"}}
 	ok, err := openBrowser(c.Dashboard + "/pig/enroll/start?" + q.Encode())
 	if err != nil {
 		return nil, "", err

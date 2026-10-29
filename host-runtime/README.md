@@ -1,6 +1,6 @@
 # Native host runtime
 
-This module implements managed runtime 0.4.0 in Go: enrollment, policy and host
+This module implements managed runtime 0.5.0 in Go: enrollment, policy and host
 configuration, detached hook supervision, trace uploads, Cursor SQLite capture,
 and cloud capture. The Python compiler embeds or downloads a source-matched
 native bundle; installed managed hooks never discover an interpreter.

@@ -24,7 +24,7 @@ from promptless_instruction_hub.cloud_bundle import CLOUD_PLUGIN_VERSION, build_
 from promptless_instruction_hub.managed_runtime import _runtime_bundle_sha256
 from promptless_instruction_hub.fs import JsonValue, validate_json_value
 
-from .helpers import _signed_policy
+from .helpers import _policy_response
 
 _GRANT = "plicg_" + "a" * 43
 
@@ -52,7 +52,7 @@ class _CloudWorker:
         self.redirect_code: int | None = None
         self.redirect_url = ""
         self.lease_overrides: dict[str, JsonValue] = {}
-        self.policy = _signed_policy()
+        self.policy = _policy_response()
         worker = self
 
         class Handler(BaseHTTPRequestHandler):

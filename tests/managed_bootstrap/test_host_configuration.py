@@ -660,6 +660,7 @@ def test_bootstrap_repeat_runs_stay_configured_without_config_writes(tmp_path: P
     "case",
     [
         "expired",
+        "schema_version",
     ],
 )
 def test_bootstrap_rejects_invalid_worker_policy(tmp_path: Path, case: str) -> None:
@@ -704,48 +705,13 @@ def test_bootstrap_rejects_invalid_worker_policy(tmp_path: Path, case: str) -> N
         server.stop()
 
 
-def test_bootstrap_ignores_legacy_collector_policy_sections(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    init_hub(hub_root, org="Promptless")
-    enable_trace_ingestion(hub_root)
-    build_hub(hub_root)
-    # Hosted policies still carry the retired OTLP collector section for older
-    # bootstraps; this runtime must tolerate any shape, including its absence.
-    malformed_collector = _policy_with(collector={"otlp_http_logs_endpoint": "not-a-url"})
-    policy_without_collector = _policy_with()
-    policy_body = _json_mapping(policy_without_collector["policy"], "policy")
-    policy_body.pop("collector", None)
-    for policy_payload in (malformed_collector, policy_without_collector):
-        server = _FakeWorkerServer(policy=policy_payload)
-        server.start()
-        try:
-            home = tmp_path / f"home-{len(server.check_ins)}-{server.base_url.rsplit(':', 1)[1]}"
-            _run_bootstrap(
-                hub_root / "dist/codex/pig",
-                "codex",
-                {
-                    "HOME": str(home),
-                    "CODEX_HOME": str(home / ".codex"),
-                    "PLUGIN_ROOT": str(hub_root / "dist/codex/pig"),
-                    "PROMPTLESS_WORKER_BASE_URL": server.base_url,
-                },
-            )
-            assert server.check_ins[-1]["status"] == "configured"
-        finally:
-            server.stop()
-
-
-def test_upload_only_policy_permissions_block_neither_ensure_nor_collect(tmp_path: Path) -> None:
+def test_lean_policy_allows_config_cleanup_and_trace_collection(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     init_hub(hub_root, org="Promptless")
     enable_trace_ingestion(hub_root)
     build_hub(hub_root)
     plugin_root = hub_root / "dist/codex/pig"
-    # Hosted policies still carry the retired plugin_permissions section for older
-    # bootstraps. An upload-only grant must not reject config cleanup or, worse,
-    # silently drop every lifecycle trace upload for the org.
-    upload_only_policy = _policy_with(plugin_permissions={"write_user_config": False, "repair_user_config": False})
-    server = _FakeWorkerServer(policy=upload_only_policy)
+    server = _FakeWorkerServer()
     server.start()
     try:
         home = tmp_path / "home"

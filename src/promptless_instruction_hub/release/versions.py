@@ -65,7 +65,6 @@ MANAGED_RUNTIME_KEYS = frozenset(
         "channel",
         "executable",
         "hook",
-        "package_id",
         "path",
         "plugin_id",
         "plugin_name",
@@ -169,7 +168,15 @@ def _validate_release_manifest(
         manifest_path,
         manifest,
         "release manifest",
-        RELEASE_MANIFEST_KEYS | ({"mcp_bundle"} if manifest.get("schema_version") == 4 else set()),
+        RELEASE_MANIFEST_KEYS
+        | (
+            {"mcp_bundle"}
+            if (
+                manifest.get("schema_version") == 4
+                or (manifest.get("schema_version") == 5 and "mcp_bundle" in manifest)
+            )
+            else set()
+        ),
     )
     _validate_schema_version(manifest_path, manifest)
     _validate_release_manifest_assets(manifest_path, manifest, version_basis)
@@ -178,8 +185,8 @@ def _validate_release_manifest(
 
 def _validate_schema_version(manifest_path: Path, manifest: dict[str, JsonValue]) -> None:
     schema_version = _lookup_path(manifest_path, manifest, "schema_version")
-    if isinstance(schema_version, bool) or not isinstance(schema_version, int) or schema_version not in {2, 3, 4}:
-        msg = f"{manifest_path}: schema_version must be 2, 3, or 4"
+    if isinstance(schema_version, bool) or not isinstance(schema_version, int) or schema_version not in {2, 3, 4, 5}:
+        msg = f"{manifest_path}: schema_version must be 2, 3, 4, or 5"
         raise ValueError(msg)
 
 
@@ -300,9 +307,17 @@ def _validate_manifest_version_basis(
         manifest_path,
         basis,
         "version_basis",
-        VERSION_BASIS_KEYS | ({"mcp_bundle"} if manifest.get("schema_version") == 4 else set()),
+        VERSION_BASIS_KEYS
+        | (
+            {"mcp_bundle"}
+            if (
+                manifest.get("schema_version") == 4
+                or (manifest.get("schema_version") == 5 and "mcp_bundle" in manifest)
+            )
+            else set()
+        ),
     )
-    if manifest.get("schema_version") == 4:
+    if manifest.get("schema_version") == 4 or (manifest.get("schema_version") == 5 and "mcp_bundle" in manifest):
         record = _require_mapping(manifest_path, basis, "mcp_bundle")
         _require_exact_keys(manifest_path, record, "mcp_bundle", frozenset({"path", "sha256"}))
         if record.get("path") != "dist/mcp":
@@ -355,6 +370,7 @@ def _validate_manifest_version_basis(
         manifest_path,
         _require_list(manifest_path, basis, "managed_runtimes", display_path="version_basis.managed_runtimes"),
         "version_basis.managed_runtimes",
+        schema_version=manifest.get("schema_version"),
     )
 
     plugins = _require_list(manifest_path, basis, "plugins", display_path="version_basis.plugins")
@@ -362,8 +378,8 @@ def _validate_manifest_version_basis(
     for index, plugin_value in enumerate(plugins):
         package = _require_mapping_value(manifest_path, plugin_value, f"version_basis.plugins[{index}]")
         if package.get("kind") == "external":
-            if manifest.get("schema_version") not in {3, 4}:
-                raise ValueError(f"{manifest_path}: external plugins require schema_version 3 or 4")
+            if manifest.get("schema_version") not in {3, 4, 5}:
+                raise ValueError(f"{manifest_path}: external plugins require schema_version 3, 4, or 5")
             if not set(_require_mapping(manifest_path, package, "targets")).intersection(targets):
                 raise ValueError(f"{manifest_path}: external plugin has no enabled Hub target")
         plugin_ids.append(_validate_plugin_basis(manifest_path, package, f"version_basis.plugins[{index}]"))
@@ -495,12 +511,16 @@ def _validate_target_hashes(
         )
 
 
-def _validate_managed_runtimes(manifest_path: Path, runtimes: list[JsonValue], key_path: str) -> None:
+def _validate_managed_runtimes(
+    manifest_path: Path, runtimes: list[JsonValue], key_path: str, *, schema_version: JsonValue | None
+) -> None:
+    # Immutable schema 2/3/4 releases remain inputs to the next publication.
+    expected_keys = MANAGED_RUNTIME_KEYS | {"package_id"} if schema_version in (2, 3, 4) else MANAGED_RUNTIME_KEYS
     for index, runtime_value in enumerate(runtimes):
         runtime = _require_mapping_value(manifest_path, runtime_value, f"{key_path}[{index}]")
         runtime_path = f"{key_path}[{index}]"
-        if set(runtime) not in (MANAGED_RUNTIME_KEYS, MANAGED_RUNTIME_KEYS | {"source_sha256", "platforms"}):
-            expected = ", ".join(sorted(MANAGED_RUNTIME_KEYS)) + " (optionally with source_sha256 and platforms)"
+        if set(runtime) not in (expected_keys, expected_keys | {"source_sha256", "platforms"}):
+            expected = ", ".join(sorted(expected_keys)) + " (optionally with source_sha256 and platforms)"
             msg = f"{manifest_path}: {runtime_path} must contain exactly these keys: {expected}"
             raise ValueError(msg)
         runtime_id = runtime["id"]

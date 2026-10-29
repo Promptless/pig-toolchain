@@ -173,7 +173,6 @@ func requestJSONRedirects(method, endpoint string, credential *Credential, body 
 	return decodeObject(b)
 }
 
-var signaturePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+:.+$`)
 var semverPattern = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)`)
 
 func requiresNewer(required string) bool {
@@ -195,11 +194,9 @@ func requiresNewer(required string) bool {
 }
 func validatePolicy(payload object, host Host) (Policy, error) {
 	p := obj(payload["policy"])
-	if !signaturePattern.MatchString(str(payload["signature"])) {
-		return Policy{}, errors.New("policy signature is missing or malformed")
-	}
-	if n, ok := integer(p["schema_version"]); !ok || n != 1 {
-		return Policy{}, errors.New("unsupported policy schema")
+
+	if n, ok := integer(p["schema_version"]); !ok || n != 2 {
+		return Policy{}, errors.New("unsupported policy schema; runtime 0.5.0 requires policy schema 2")
 	}
 	exp, err := time.Parse(time.RFC3339Nano, str(p["expires_at"]))
 	if err != nil || !exp.After(time.Now()) {
@@ -225,8 +222,7 @@ func validatePolicy(payload object, host Host) (Policy, error) {
 			return Policy{}, errors.New("required_bootstrap_version must be a string")
 		}
 	}
-	// The deployed contract authenticates the envelope over HTTPS. It has no
-	// published trust key; checking signature syntax is not signature verification.
+	// Policy is authenticated by the approved credential and HTTPS transport.
 	return Policy{v, str(p["required_bootstrap_version"])}, nil
 }
 func internalIdentity(payload object) bool {
@@ -274,7 +270,7 @@ func pluginRoot() string {
 	return ""
 }
 func metadata(root string, h Host) Metadata {
-	m := Metadata{Version, "unknown", "unknown", "unknown", "unknown", "unknown", h}
+	m := Metadata{Version, "unknown", "unknown", "unknown", "unknown", h}
 	if root == "" {
 		return m
 	}
@@ -292,7 +288,7 @@ func metadata(root string, h Host) Metadata {
 		if v["id"] != "host-runtime" || v["status"] != "included" {
 			continue
 		}
-		for key, dest := range map[string]*string{"toolchain_version": &m.ToolchainVersion, "plugin_id": &m.PluginID, "plugin_name": &m.PluginName, "plugin_version": &m.PluginVersion, "package_id": &m.PackageID} {
+		for key, dest := range map[string]*string{"toolchain_version": &m.ToolchainVersion, "plugin_id": &m.PluginID, "plugin_name": &m.PluginName, "plugin_version": &m.PluginVersion} {
 			if s := str(v[key]); s != "" {
 				*dest = s
 			}

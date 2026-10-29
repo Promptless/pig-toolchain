@@ -21,7 +21,7 @@ import (
 	"unicode/utf16"
 )
 
-const Version = "0.4.0"
+const Version = "0.5.0"
 const executableName = "promptless-host-runtime"
 const maxStdin = 1 << 20
 const maxRecord = 10 << 20
@@ -52,7 +52,6 @@ type Metadata struct {
 	PluginID         string `json:"plugin_id"`
 	PluginName       string `json:"plugin_name"`
 	PluginVersion    string `json:"plugin_version"`
-	PackageID        string `json:"package_id"`
 	Target           Host   `json:"target"`
 }
 type Credential struct {

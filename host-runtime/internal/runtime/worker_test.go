@@ -81,7 +81,7 @@ func (w *testWorker) serve(rw http.ResponseWriter, r *http.Request) {
 	case "/healthz":
 		response = object{"deployment_instance_id": "deployment"}
 	case "/v0/host-enrollment/policy":
-		response = object{"signature": "test:signature", "policy": object{"schema_version": 1, "policy_version": 1, "enabled_hosts": []string{"codex", "claude", "cursor"}, "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339), "required_bootstrap_version": w.required}}
+		response = object{"policy": object{"schema_version": 2, "policy_version": 1, "enabled_hosts": []string{"codex", "claude", "cursor"}, "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339), "required_bootstrap_version": w.required}}
 	case "/v0/host-enrollment/check-ins":
 		response = object{"accepted": true, "policy_version": 1}
 	case "/v0/cloud-enrollment/leases":

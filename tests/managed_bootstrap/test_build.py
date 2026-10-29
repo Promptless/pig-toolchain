@@ -43,7 +43,7 @@ def test_build_injects_native_runtime(tmp_path: Path) -> None:
             text=True,
             check=True,
         )
-        assert json.loads(result.stdout)["version"] == "0.4.0"
+        assert json.loads(result.stdout)["version"] == "0.5.0"
         assert result.stderr == ""
         assert "/runtime/** -text" in (plugin / ".gitattributes").read_text()
 
@@ -108,7 +108,7 @@ def test_build_leaves_customer_package_hook_unmanaged(tmp_path: Path) -> None:
                 ]
             }
         },
-        package_id="customer",
+        plugin_id="customer",
     )
 
     build_hub(hub_root)
