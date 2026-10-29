@@ -21,6 +21,35 @@ const maxContextFile = 16 << 20
 const maxContextSource = 32 << 20
 const maxContextTransport = 8 << 20
 const maxContextFiles = 512
+const maxContextDiagnostics = 64 << 10
+const maxContextInventory = 512 << 10
+
+// Diagnostics also appear outside compressed bundles, so bound their wire size.
+// Reserve room for one explicit notice when detailed entries are omitted.
+type contextDiagnostics struct {
+	entries []object
+	bytes   int
+	omitted bool
+}
+
+func (d *contextDiagnostics) add(entries ...object) {
+	for _, entry := range entries {
+		size := len(legacyJSON(entry)) + 2
+		if d.bytes+size > maxContextDiagnostics-256 {
+			d.omitted = true
+			continue
+		}
+		d.entries = append(d.entries, entry)
+		d.bytes += size
+	}
+}
+func (d *contextDiagnostics) values() []object {
+	entries := append([]object{}, d.entries...)
+	if d.omitted {
+		entries = append(entries, object{"code": "context_diagnostics_truncated", "severity": "warning"})
+	}
+	return entries
+}
 
 var contextSecretPath = regexp.MustCompile(`(?i)(^\.env(\.|$)|(^|[-_.])(secrets?|credentials?|tokens?|password|passwd|private[-_]?key|api[-_]?key)([-_.]|$)|^(id_rsa|id_ed25519|\.netrc)$)`)
 var contextSecretValue = regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password|authorization|private[_-]?key)\s*[:=]\s*['"]?[A-Za-z0-9._~+/=-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----`)
@@ -104,7 +133,8 @@ func skillDescription(content []byte, fallback string) (string, string) {
 	return name, description
 }
 func skillBundle(root *os.Root, path, name string, deadline time.Time) (object, []object, error) {
-	files, diagnostics := []object{}, []object{}
+	files := []object{}
+	diagnostics := contextDiagnostics{}
 	sourceBytes, visited := 0, 0
 	truncated := false
 	err := walkContext(root, func(relative string, entry fs.DirEntry, walkErr error) error {
@@ -117,7 +147,7 @@ func skillBundle(root *os.Root, path, name string, deadline time.Time) (object, 
 			return fs.SkipAll
 		}
 		if walkErr != nil {
-			diagnostics = append(diagnostics, object{"code": "context_artifact_scan_failed", "severity": "warning"})
+			diagnostics.add(object{"code": "context_artifact_scan_failed", "severity": "warning"})
 			return fs.SkipDir
 		}
 		if relative == "." {
@@ -134,7 +164,7 @@ func skillBundle(root *os.Root, path, name string, deadline time.Time) (object, 
 		}
 		b, err := contextFile(root, relative, maxContextSource-sourceBytes)
 		if err != nil {
-			diagnostics = append(diagnostics, object{"code": "context_artifact_file_skipped", "severity": "warning", "path": relative})
+			diagnostics.add(object{"code": "context_artifact_file_skipped", "severity": "warning", "path": relative})
 			return nil
 		}
 		sourceBytes += len(b)
@@ -144,7 +174,7 @@ func skillBundle(root *os.Root, path, name string, deadline time.Time) (object, 
 	if err != nil {
 		return nil, nil, err
 	}
-	return object{"schema_version": 1, "kind": "skill_bundle", "name": name, "root_path_hash": hash([]byte(path)), "file_count": len(files), "file_source_byte_count": sourceBytes, "truncated": truncated, "files": files, "diagnostics": diagnostics}, diagnostics, nil
+	return object{"schema_version": 1, "kind": "skill_bundle", "name": name, "root_path_hash": hash([]byte(path)), "file_count": len(files), "file_source_byte_count": sourceBytes, "truncated": truncated, "files": files, "diagnostics": diagnostics.values()}, diagnostics.values(), nil
 }
 func sessionContext(rootPath string, o uploadOptions) (object, []object, error) {
 	session := o.Context.SessionID
@@ -154,7 +184,9 @@ func sessionContext(rootPath string, o uploadOptions) (object, []object, error) 
 	if o.Policy.ContextVersion != 1 || session == "" {
 		return nil, nil, nil
 	}
-	skills, artifacts, summaries, diagnostics := []object{}, []object{}, []object{}, []object{}
+	skills, artifacts, summaries := []object{}, []object{}, []object{}
+	diagnostics := contextDiagnostics{}
+	inventoryBytes := 0
 	remaining := maxContextTransport
 	skillsPath := filepath.Join(rootPath, "skills")
 	info, err := os.Lstat(skillsPath)
@@ -180,7 +212,7 @@ func sessionContext(rootPath string, o uploadOptions) (object, []object, error) 
 		}
 		if len(entries) > maxContextFiles {
 			entries = entries[:maxContextFiles]
-			diagnostics = append(diagnostics, object{"code": "context_inventory_limit_exceeded", "severity": "warning"})
+			diagnostics.add(object{"code": "context_inventory_limit_exceeded", "severity": "warning"})
 		}
 		// Directory enumeration order must not change manifest hashes.
 		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
@@ -202,13 +234,21 @@ func sessionContext(rootPath string, o uploadOptions) (object, []object, error) 
 			}
 			name, description := skillDescription(b, entry.Name())
 			path := filepath.Join(skillsPath, entry.Name())
+			inventory := object{"name": name, "description": description, "source": "plugin", "plugin_id": o.Metadata.PluginID, "plugin_version": o.Metadata.PluginVersion, "root_path_hash": hash([]byte(path)), "skill_file_sha256": hash(b)}
+			// Include space for the artifact ID added after compression.
+			size := len(legacyJSON(inventory)) + 128
+			if inventoryBytes+size > maxContextInventory {
+				skill.Close()
+				diagnostics.add(object{"code": "context_inventory_budget_exceeded", "severity": "warning"})
+				break
+			}
+			inventoryBytes += size
 			bundle, notes, err := skillBundle(skill, path, name, o.Deadline)
 			skill.Close()
 			if err != nil {
 				return nil, nil, err
 			}
-			diagnostics = append(diagnostics, notes...)
-			inventory := object{"name": name, "description": description, "source": "plugin", "plugin_id": o.Metadata.PluginID, "plugin_version": o.Metadata.PluginVersion, "root_path_hash": hash([]byte(path)), "skill_file_sha256": hash(b)}
+			diagnostics.add(notes...)
 			raw := contextJSON(bundle)
 			var compressed bytes.Buffer
 			z := gzip.NewWriter(&compressed)
@@ -228,19 +268,19 @@ func sessionContext(rootPath string, o uploadOptions) (object, []object, error) 
 			artifact["content_type"] = "application/json"
 			artifact["content_encoding"] = "gzip"
 			artifact["content_base64"] = base64.StdEncoding.EncodeToString(compressed.Bytes())
-			size := len(contextJSON(artifact))
+			size = len(legacyJSON(artifact))
 			if size <= remaining {
 				remaining -= size
 				inventory["artifact_id"] = id
 				artifacts = append(artifacts, artifact)
 				summaries = append(summaries, summary)
 			} else {
-				diagnostics = append(diagnostics, object{"code": "context_artifact_transport_budget_exceeded", "severity": "warning", "name": name})
+				diagnostics.add(object{"code": "context_artifact_transport_budget_exceeded", "severity": "warning", "name": name})
 			}
 			skills = append(skills, inventory)
 		}
 	} else {
-		diagnostics = append(diagnostics, object{"code": "missing_available_skills", "severity": "warning"})
+		diagnostics.add(object{"code": "missing_available_skills", "severity": "warning"})
 	}
 	cwd, _ := os.Getwd()
 	home, _ := os.UserHomeDir()
@@ -252,14 +292,35 @@ func sessionContext(rootPath string, o uploadOptions) (object, []object, error) 
 		workspace["agent_transcript_path_hash"] = hash([]byte(o.Context.AgentTranscript))
 	}
 	m := o.Metadata
-	manifest := object{"schema_version": 1, "session_id": session, "collector_version": m.BootstrapVersion, "plugin_version": m.PluginVersion, "installed_plugins": []object{{"plugin_id": m.PluginID, "version": m.PluginVersion, "plugin_version": m.PluginVersion, "target": m.Target, "source": "managed_runtime"}}, "available_skills": skills, "workspace": workspace, "runtime": object{"host": o.Host, "runtime_version": m.BootstrapVersion, "toolchain_version": m.ToolchainVersion, "go_version": goruntime.Version(), "platform": goruntime.GOOS + "/" + goruntime.GOARCH}, "sidecars": []object{{"kind": "managed_runtime", "id": "host-runtime", "version": m.BootstrapVersion, "plugin_root_hash": hash([]byte(rootPath))}}, "raw_artifacts": summaries, "diagnostics": diagnostics}
+	manifest := object{"schema_version": 1, "session_id": session, "collector_version": m.BootstrapVersion, "plugin_version": m.PluginVersion, "installed_plugins": []object{{"plugin_id": m.PluginID, "version": m.PluginVersion, "plugin_version": m.PluginVersion, "target": m.Target, "source": "managed_runtime"}}, "available_skills": skills, "workspace": workspace, "runtime": object{"host": o.Host, "runtime_version": m.BootstrapVersion, "toolchain_version": m.ToolchainVersion, "go_version": goruntime.Version(), "platform": goruntime.GOOS + "/" + goruntime.GOARCH}, "sidecars": []object{{"kind": "managed_runtime", "id": "host-runtime", "version": m.BootstrapVersion, "plugin_root_hash": hash([]byte(rootPath))}}, "raw_artifacts": summaries, "diagnostics": diagnostics.values()}
 	for k, v := range o.Context.requestContext(o.Lifecycle) {
 		manifest[k] = v
 	}
 	manifest["session_id"] = session
-	manifest["manifest_hash"] = hash(contextJSON(manifest))
-	manifest["captured_at"] = nowISO()
-	return manifest, artifacts, nil
+	// Admit artifacts against the complete wire request, including the manifest,
+	// summaries, inventory, diagnostics, and envelope. Hash the admitted payload.
+	for {
+		delete(manifest, "manifest_hash")
+		delete(manifest, "captured_at")
+		manifest["manifest_hash"] = hash(contextJSON(manifest))
+		manifest["captured_at"] = nowISO()
+		if len(legacyJSON(contextRequest(manifest, artifacts, o))) <= maxTransport {
+			return manifest, artifacts, nil
+		}
+		if len(artifacts) == 0 {
+			return nil, nil, errors.New("context metadata exceeds transport limit")
+		}
+		last := len(artifacts) - 1
+		id := artifacts[last]["artifact_id"]
+		artifacts, summaries = artifacts[:last], summaries[:last]
+		for _, skill := range skills {
+			if skill["artifact_id"] == id {
+				delete(skill, "artifact_id")
+			}
+		}
+		diagnostics.add(object{"code": "context_artifact_transport_budget_exceeded", "severity": "warning"})
+		manifest["raw_artifacts"], manifest["diagnostics"] = summaries, diagnostics.values()
+	}
 }
 
 // Context acknowledgment never advances transcript offsets. Holding the same
@@ -282,11 +343,8 @@ func uploadSessionContext(root string, o uploadOptions) (bool, error) {
 	if ledger.ContextHashes[session] == digest {
 		return false, nil
 	}
-	request := object{"batch_id": "native-" + hash(contextJSON(object{"host": o.Host, "policy_version": o.Policy.Version, "context_manifest_hash": digest, "ranges": []object{}}))[:48], "source": o.Host, "host": o.Host, "policy_version": o.Policy.Version, "collector_version": o.Metadata.BootstrapVersion, "plugin_version": o.Metadata.PluginVersion, "uploaded_at": nowISO(), "chunks": []object{}, "session_context_manifests": []object{manifest}, "context_artifacts": artifacts}
-	for k, v := range o.Context.requestContext(o.Lifecycle) {
-		request[k] = v
-	}
-	if len(contextJSON(request)) > maxTransport {
+	request := contextRequest(manifest, artifacts, o)
+	if len(legacyJSON(request)) > maxTransport {
 		return false, errors.New("context exceeds transport limit")
 	}
 	if err = checkDeadline(o.Deadline); err != nil {
@@ -301,6 +359,14 @@ func uploadSessionContext(root string, o uploadOptions) (bool, error) {
 	}
 	ledger.ContextHashes[session] = digest
 	return true, ledger.write()
+}
+func contextRequest(manifest object, artifacts []object, o uploadOptions) object {
+	digest := str(manifest["manifest_hash"])
+	request := object{"batch_id": "native-" + hash(contextJSON(object{"host": o.Host, "policy_version": o.Policy.Version, "context_manifest_hash": digest, "ranges": []object{}}))[:48], "source": o.Host, "host": o.Host, "policy_version": o.Policy.Version, "collector_version": o.Metadata.BootstrapVersion, "plugin_version": o.Metadata.PluginVersion, "uploaded_at": nowISO(), "chunks": []object{}, "session_context_manifests": []object{manifest}, "context_artifacts": artifacts}
+	for k, v := range o.Context.requestContext(o.Lifecycle) {
+		request[k] = v
+	}
+	return request
 }
 func validateContextAck(response, request object, p Policy, digest string, count int) error {
 	if response["accepted"] != true || response["batch_id"] != request["batch_id"] {

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,5 +223,155 @@ func TestContextFileAndInventoryLimits(t *testing.T) {
 	}
 	if bundle["truncated"] != true || bundle["file_count"].(int) > maxContextFiles {
 		t.Fatal("unbounded inventory")
+	}
+}
+
+func TestCollectCursorSubagentContextUsesParentSession(t *testing.T) {
+	f := newCursorFixture(t)
+	f.session("child", 1)
+	w := newTestWorker(t, true)
+	root, _ := contextFixture(t, w)
+	t.Setenv("PLUGIN_ROOT", root)
+	seedEnrollment(t, w, Cursor)
+	w.change(func() { w.contextVersion = 1 })
+	hook := HookContext{SessionID: "parent", AgentID: "child", GenerationID: "g"}
+	out := &output{stdout: io.Discard, stderr: io.Discard}
+	if complete, err := collect(Cursor, "subagent_stop", hook, true, true, out); err != nil || !complete {
+		t.Fatal(complete, err)
+	}
+	contexts := 0
+	for _, r := range w.at("/v0/traces/batches") {
+		manifests, ok := r.Body["session_context_manifests"].([]any)
+		if !ok {
+			continue
+		}
+		contexts++
+		if len(manifests) != 1 || obj(manifests[0])["session_id"] != "parent" {
+			t.Fatal("context lost original parent identity", manifests)
+		}
+		artifacts := r.Body["context_artifacts"].([]any)
+		if len(artifacts) != 1 || obj(artifacts[0])["session_id"] != "parent" {
+			t.Fatal("skill artifacts assigned to child", artifacts)
+		}
+	}
+	if contexts != 1 {
+		t.Fatal("missing context upload", contexts)
+	}
+	for _, row := range journalRows(t, "child") {
+		if row["session_id"] != "child" {
+			t.Fatal("transcript lost child identity", row)
+		}
+	}
+}
+
+func TestContextDiagnosticBudgetsPermitAcknowledgedUploads(t *testing.T) {
+	w := newTestWorker(t, true)
+	root, o := contextFixture(t, w)
+	o.Deadline = time.Now().Add(time.Minute)
+	// Escaped Unicode paths exercise serialized bytes rather than string lengths.
+	for i := range 4 {
+		dir := filepath.Join(root, "skills", fmt.Sprint(i))
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		mustWrite(t, filepath.Join(dir, "SKILL.md"), []byte("# Test"))
+		for j := range 128 {
+			path := filepath.Join(dir, fmt.Sprintf("%03d-%s.md", j, strings.Repeat("界", 60)))
+			mustWrite(t, path, []byte("token=abcdefghijklmnopqrstuv1234"))
+		}
+	}
+	manifest, artifacts, err := sessionContext(root, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostics := manifest["diagnostics"].([]object)
+	if len(legacyJSON(diagnostics)) > maxContextDiagnostics {
+		t.Fatal("manifest diagnostics exceeded byte budget")
+	}
+	if len(diagnostics) == 0 || diagnostics[len(diagnostics)-1]["code"] != "context_diagnostics_truncated" {
+		t.Fatal("missing truncation notice")
+	}
+	for _, artifact := range artifacts {
+		compressed, _ := base64.StdEncoding.DecodeString(str(artifact["content_base64"]))
+		z, err := gzip.NewReader(bytes.NewReader(compressed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(z)
+		z.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		bundle, err := decodeObject(raw)
+		if err != nil || len(legacyJSON(bundle["diagnostics"])) > maxContextDiagnostics {
+			t.Fatal("bundle diagnostics exceeded byte budget", err)
+		}
+	}
+	if len(legacyJSON(contextRequest(manifest, artifacts, o))) > maxTransport {
+		t.Fatal("complete request exceeded transport budget")
+	}
+	if sent, err := uploadSessionContext(root, o); err != nil || !sent {
+		t.Fatal("bounded context was not acknowledged", sent, err)
+	}
+	if sent, err := uploadSessionContext(root, o); err != nil || sent {
+		t.Fatal("bounded context did not deduplicate", sent, err)
+	}
+}
+
+func TestContextInventoryUsesSerializedByteBudget(t *testing.T) {
+	w := newTestWorker(t, true)
+	root, o := contextFixture(t, w)
+	o.Deadline = time.Now().Add(time.Minute)
+	for i := range 64 {
+		dir := filepath.Join(root, "skills", fmt.Sprint(i))
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		mustWrite(t, filepath.Join(dir, "SKILL.md"), []byte("---\nname: test\ndescription: "+strings.Repeat("界", 1300)+"\n---\n"))
+	}
+	manifest, artifacts, err := sessionContext(root, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	skills := manifest["available_skills"].([]object)
+	if len(skills) >= 64 || len(legacyJSON(skills)) > maxContextInventory {
+		t.Fatal("inventory was not bounded by serialized bytes", len(skills))
+	}
+	if len(legacyJSON(contextRequest(manifest, artifacts, o))) > maxTransport {
+		t.Fatal("complete request exceeded transport budget")
+	}
+}
+
+func TestContextArtifactAdmissionIncludesRequestEnvelope(t *testing.T) {
+	w := newTestWorker(t, true)
+	root, o := contextFixture(t, w)
+	o.Deadline = time.Now().Add(time.Minute)
+	o.Context.ParentSessionID, o.Context.AgentID = "parent", "agent"
+	// Hook metadata occurs in both the envelope and manifest. Make that cost
+	// large enough that an artifact fitting its own budget cannot also fit it.
+	o.Context.AgentType = strings.Repeat("x", 2<<20)
+	payload := make([]byte, 5<<20)
+	_, _ = rand.New(rand.NewSource(1)).Read(payload)
+	mustWrite(t, filepath.Join(root, "skills", "test", "reference.bin"), payload)
+	manifest, artifacts, err := sessionContext(root, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 0 || len(manifest["raw_artifacts"].([]object)) != 0 {
+		t.Fatal("artifact admission ignored envelope bytes")
+	}
+	for _, skill := range manifest["available_skills"].([]object) {
+		if _, ok := skill["artifact_id"]; ok {
+			t.Fatal("inventory references omitted artifact")
+		}
+	}
+	if len(legacyJSON(contextRequest(manifest, artifacts, o))) > maxTransport {
+		t.Fatal("complete request exceeded transport budget")
+	}
+	hashInput := clone(manifest)
+	delete(hashInput, "manifest_hash")
+	delete(hashInput, "captured_at")
+	if hash(contextJSON(hashInput)) != manifest["manifest_hash"] {
+		t.Fatal("hash does not describe admitted manifest")
 	}
 }

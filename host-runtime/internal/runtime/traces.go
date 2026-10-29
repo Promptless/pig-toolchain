@@ -570,6 +570,8 @@ func collect(h Host, lifecycle string, context HookContext, active, quiet bool, 
 		out.emit(object{"status": "blocked", "reason": "bootstrap_upgrade_required", "host": h}, quiet)
 		return false, nil
 	}
+	// Cursor journal export rewrites session identity for transcript routing only.
+	hookContext, hookLifecycle := context, lifecycle
 	exportComplete := true
 	if h == Cursor {
 		context, exportComplete, err = prepareCursorJournals(context, lifecycle)
@@ -588,7 +590,9 @@ func collect(h Host, lifecycle string, context HookContext, active, quiet bool, 
 	exceeded := errors.Is(err, errDeadline)
 	options.Limit = 0
 	options.Deadline = time.Now().Add(collectBudget())
-	contextUploaded, contextErr := uploadSessionContext(pluginRoot(), options)
+	contextOptions := options
+	contextOptions.Context, contextOptions.Lifecycle = hookContext, hookLifecycle
+	contextUploaded, contextErr := uploadSessionContext(pluginRoot(), contextOptions)
 	if authError(contextErr) {
 		return false, contextErr
 	}
