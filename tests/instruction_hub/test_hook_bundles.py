@@ -184,9 +184,10 @@ def test_git_checkout_preserves_hashed_hook_bytes(tmp_path: Path) -> None:
 
 def test_missing_platform_runtime_is_nonblocking(tmp_path: Path) -> None:
     plugin, command, prepare = snapshot(tmp_path, "codex", "0.1.0")
-    shutil.rmtree(plugin / "runtime/native")
     if os.name == "nt":
         (plugin / "runtime/promptless-host-runtime.exe").unlink()
+    else:
+        shutil.rmtree(plugin / "runtime/native")
     for action in (prepare, command):
         result = invoke(plugin, "codex", action)
         assert result.returncode == 0 and not result.stdout
