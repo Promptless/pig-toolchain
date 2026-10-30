@@ -29,10 +29,11 @@ func checkDeadline(deadline time.Time) error {
 }
 
 type sourceLedger struct {
-	Path    string
-	Sources object
-	Reset   map[string]bool
-	Drift   []object
+	ContextHashes object
+	Path          string
+	Sources       object
+	Reset         map[string]bool
+	Drift         []object
 }
 type sourceEvent struct {
 	Kind, Path, PathHash, ContentHash, Reason string
@@ -62,7 +63,7 @@ func (e sourceEvent) prefixAt(end int64) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 func loadLedger(path string) (*sourceLedger, error) {
-	l := &sourceLedger{Path: path, Sources: object{}, Reset: map[string]bool{}, Drift: []object{}}
+	l := &sourceLedger{Path: path, ContextHashes: object{}, Sources: object{}, Reset: map[string]bool{}, Drift: []object{}}
 	if !exists(path) {
 		return l, nil
 	}
@@ -82,6 +83,11 @@ func loadLedger(path string) (*sourceLedger, error) {
 		l.Drift = append(l.Drift, object{"kind": "native_trace_ledger_reset", "reason": reason})
 		return l, nil
 	}
+	for key, value := range obj(v["session_context_manifest_hashes"]) {
+		if digest := str(value); len(digest) == 64 && key != "" {
+			l.ContextHashes[key] = digest
+		}
+	}
 	for key, value := range obj(v["sources"]) {
 		source := obj(value)
 		n, ok := integer(source["end_offset"])
@@ -95,7 +101,7 @@ func loadLedger(path string) (*sourceLedger, error) {
 	return l, nil
 }
 func (l *sourceLedger) write() error {
-	return writeState(l.Path, object{"schema_version": 1, "updated_at": nowISO(), "sources": l.Sources})
+	return writeState(l.Path, object{"schema_version": 1, "updated_at": nowISO(), "sources": l.Sources, "session_context_manifest_hashes": l.ContextHashes})
 }
 func (l *sourceLedger) record(e sourceEvent, end int64) error {
 	source := clone(obj(l.Sources[e.PathHash]))
@@ -564,6 +570,8 @@ func collect(h Host, lifecycle string, context HookContext, active, quiet bool, 
 		out.emit(object{"status": "blocked", "reason": "bootstrap_upgrade_required", "host": h}, quiet)
 		return false, nil
 	}
+	// Cursor journal export rewrites session identity for transcript routing only.
+	hookContext, hookLifecycle := context, lifecycle
 	exportComplete := true
 	if h == Cursor {
 		context, exportComplete, err = prepareCursorJournals(context, lifecycle)
@@ -605,7 +613,7 @@ func collect(h Host, lifecycle string, context HookContext, active, quiet bool, 
 				seen[p] = true
 			}
 		}
-		if len(current) == 0 && len(idle) == 0 && complete {
+		if len(current) == 0 && len(idle) == 0 && complete && policy.ContextVersion == 0 {
 			out.emit(object{"status": "trace_upload_skipped", "reason": "no_sources", "host": h}, quiet)
 			return false, nil
 		}
@@ -619,12 +627,24 @@ func collect(h Host, lifecycle string, context HookContext, active, quiet bool, 
 			exceeded = errors.Is(err, errDeadline)
 		}
 	}
-	complete := !exceeded && len(total.Unreadable) == 0 && exportComplete
+	contextOptions := options
+	contextOptions.Context, contextOptions.Lifecycle = hookContext, hookLifecycle
+	contextUploaded, contextErr := uploadSessionContext(pluginRoot(), contextOptions)
+	if authError(contextErr) {
+		return false, contextErr
+	}
+	if contextUploaded {
+		total.Batches++
+	}
+	complete := !exceeded && len(total.Unreadable) == 0 && exportComplete && contextErr == nil
 	status := "trace_upload_complete"
 	if !complete {
 		status = "trace_upload_partial"
 	}
 	payload := object{"status": status, "host": h, "batch_count": total.Batches, "chunk_count": total.Chunks, "unparsed_record_count": total.Unparsed}
+	if contextErr != nil {
+		payload["context_upload_pending"] = true
+	}
 	if len(total.Unreadable) > 0 {
 		payload["unreadable_source_count"] = len(total.Unreadable)
 	}

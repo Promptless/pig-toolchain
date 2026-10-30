@@ -62,6 +62,7 @@ type Credential struct {
 	ProducerToken string `json:"-"`
 }
 type Policy struct {
+	ContextVersion  int64
 	Version         int64
 	RequiredVersion string
 }

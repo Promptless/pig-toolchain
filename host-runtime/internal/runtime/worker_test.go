@@ -26,6 +26,8 @@ type testWorker struct {
 	requests             []recordedRequest
 	required             string
 	rejectAck            bool
+	contextVersion       int64
+	rejectContext        bool
 	dropPath, rejectPath string
 	leaseOverrides       object
 	onUpload             func(object)
@@ -82,6 +84,9 @@ func (w *testWorker) serve(rw http.ResponseWriter, r *http.Request) {
 		response = object{"deployment_instance_id": "deployment"}
 	case "/v0/host-enrollment/policy":
 		response = object{"policy": object{"schema_version": 2, "policy_version": 1, "enabled_hosts": []string{"codex", "claude", "cursor"}, "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339), "required_bootstrap_version": w.required}}
+		if w.contextVersion != 0 {
+			obj(response["policy"])["trace_context_manifest_version"] = w.contextVersion
+		}
 	case "/v0/host-enrollment/check-ins":
 		response = object{"accepted": true, "policy_version": 1}
 	case "/v0/cloud-enrollment/leases":
@@ -94,6 +99,18 @@ func (w *testWorker) serve(rw http.ResponseWriter, r *http.Request) {
 			w.onUpload(body)
 		}
 		response = ackRequest(body)
+		if manifests, ok := body["session_context_manifests"].([]any); ok {
+			hashes := []string{}
+			for _, m := range manifests {
+				hashes = append(hashes, str(obj(m)["manifest_hash"]))
+			}
+			if w.rejectContext {
+				hashes = []string{}
+			}
+			response["accepted_session_context_manifest_hashes"] = hashes
+			artifacts, _ := body["context_artifacts"].([]any)
+			response["raw_context_artifact_count"] = len(artifacts)
+		}
 		if w.rejectAck {
 			response["acknowledged_ranges"] = []object{}
 		}
