@@ -1055,17 +1055,21 @@ treated as the version associated with every byte in that batch.
 
 When the hosted policy sets `trace_context_manifest_version: 1`, collection also
 uploads a session context manifest and compressed skill bundles from the executing
-plugin's `skills/` directory. This optional upload follows transcript progress;
+plugin's `skills/` directory. This optional upload follows transcript backlog uploads;
 rejected context retries without replaying acknowledged transcript bytes. The
 scoped ledger records the manifest hash only after an exact worker acknowledgment.
 Subagent context belongs to its parent session.
 
 Inventory is bounded to 512 skills and 512 inspected entries per skill, 16 MiB per
-file, 32 MiB of source per skill, and 8 MiB of artifact transport per collection.
+file, 32 MiB of inspected source per skill (including excluded content), and 8 MiB
+of artifact transport per collection. Diagnostics and skill metadata have separate
+serialized byte limits, and admission checks the complete 10 MiB request limit.
 Symlinks, secret-looking filenames, and files with secret-looking contents are
-excluded. Collection respects the remaining trace deadline and reports pending
-context separately. The worker must support context artifact counts and accepted
-manifest hashes before enabling the policy.
+excluded. Context scanning uses a budget of at most two seconds and half the
+remaining trace deadline, reserving time to send a partial manifest with explicit
+diagnostics if scanning stops. Rejected context uploads remain pending separately.
+The worker must support context artifact counts and accepted manifest hashes before
+enabling the policy.
 
 #### Collection safety
 

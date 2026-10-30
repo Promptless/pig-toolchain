@@ -179,12 +179,23 @@ func skillBundle(root *os.Root, path, name string, deadline time.Time) (object, 
 	return object{"schema_version": 1, "kind": "skill_bundle", "name": name, "root_path_hash": hash([]byte(path)), "file_count": len(files), "file_source_byte_count": sourceBytes, "truncated": truncated, "files": files, "diagnostics": diagnostics.values()}, diagnostics.values(), nil
 }
 func sessionContext(rootPath string, o uploadOptions) (object, []object, error) {
+	// Keep part of the remaining collection budget for sending a partial capture.
+	budget := 2 * time.Second
+	if !o.Deadline.IsZero() {
+		budget = min(budget, time.Until(o.Deadline)/2)
+	}
+	return captureSessionContext(rootPath, o, time.Now().Add(budget))
+}
+func captureSessionContext(rootPath string, o uploadOptions, scanDeadline time.Time) (object, []object, error) {
 	session := o.Context.SessionID
 	if o.Lifecycle == "subagent_stop" && o.Context.ParentSessionID != "" {
 		session = o.Context.ParentSessionID
 	}
 	if o.Policy.ContextVersion != 1 || session == "" {
 		return nil, nil, nil
+	}
+	if err := checkDeadline(o.Deadline); err != nil {
+		return nil, nil, err
 	}
 	skills, artifacts, summaries := []object{}, []object{}, []object{}
 	diagnostics := contextDiagnostics{}
@@ -219,8 +230,9 @@ func sessionContext(rootPath string, o uploadOptions) (object, []object, error) 
 		// Directory enumeration order must not change manifest hashes.
 		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 		for _, entry := range entries {
-			if err := checkDeadline(o.Deadline); err != nil {
-				return nil, nil, err
+			if checkDeadline(scanDeadline) != nil {
+				diagnostics.add(object{"code": "context_capture_deadline_exceeded", "severity": "warning"})
+				break
 			}
 			if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || contextSensitivePath(entry.Name()) {
 				continue
@@ -245,8 +257,12 @@ func sessionContext(rootPath string, o uploadOptions) (object, []object, error) 
 				break
 			}
 			inventoryBytes += size
-			bundle, notes, err := skillBundle(skill, path, name, o.Deadline)
+			bundle, notes, err := skillBundle(skill, path, name, scanDeadline)
 			skill.Close()
+			if errors.Is(err, errDeadline) {
+				diagnostics.add(object{"code": "context_capture_deadline_exceeded", "severity": "warning"})
+				break
+			}
 			if err != nil {
 				return nil, nil, err
 			}
@@ -278,8 +294,14 @@ func sessionContext(rootPath string, o uploadOptions) (object, []object, error) 
 				summaries = append(summaries, summary)
 			} else {
 				diagnostics.add(object{"code": "context_artifact_transport_budget_exceeded", "severity": "warning", "name": name})
+				skills = append(skills, inventory)
+				break
 			}
 			skills = append(skills, inventory)
+			if remaining == 0 {
+				diagnostics.add(object{"code": "context_artifact_transport_budget_exceeded", "severity": "warning"})
+				break
+			}
 		}
 	} else {
 		diagnostics.add(object{"code": "missing_available_skills", "severity": "warning"})

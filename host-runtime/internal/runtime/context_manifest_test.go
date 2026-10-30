@@ -363,7 +363,7 @@ func TestContextArtifactAdmissionIncludesRequestEnvelope(t *testing.T) {
 	payload := make([]byte, 5<<20)
 	_, _ = rand.New(rand.NewSource(1)).Read(payload)
 	mustWrite(t, filepath.Join(root, "skills", "test", "reference.bin"), payload)
-	manifest, artifacts, err := sessionContext(root, o)
+	manifest, artifacts, err := captureSessionContext(root, o, o.Deadline)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,5 +411,54 @@ func TestContextSourceBudgetIncludesExcludedFileReads(t *testing.T) {
 	files := bundle["files"].([]object)
 	if len(files) != 1 || files[0]["path"] != "SKILL.md" {
 		t.Fatal("excluded reads bypassed cumulative source budget", len(files))
+	}
+}
+
+func TestContextScanDeadlinePreservesSendablePartialManifest(t *testing.T) {
+	w := newTestWorker(t, true)
+	root, o := contextFixture(t, w)
+	manifest, artifacts, err := captureSessionContext(root, o, time.Now().Add(-time.Second))
+	if err != nil || manifest == nil {
+		t.Fatal("expired scan discarded partial context", err)
+	}
+	diagnostics := manifest["diagnostics"].([]object)
+	if len(diagnostics) != 1 || diagnostics[0]["code"] != "context_capture_deadline_exceeded" {
+		t.Fatal("partial capture not identified", diagnostics)
+	}
+	request := contextRequest(manifest, artifacts, o)
+	response, err := requestJSON("POST", o.URL, o.Credential, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateContextAck(response, request, o.Policy, str(manifest["manifest_hash"]), len(artifacts)); err != nil {
+		t.Fatal("partial context not acknowledged", err)
+	}
+}
+
+func TestCollectSendsTranscriptBacklogBeforeOptionalContext(t *testing.T) {
+	privateHome(t)
+	w := newTestWorker(t, true)
+	root, _ := contextFixture(t, w)
+	t.Setenv("PLUGIN_ROOT", root)
+	seedEnrollment(t, w, Codex)
+	w.change(func() { w.contextVersion = 1 })
+	parent := filepath.Join(t.TempDir(), "parent.jsonl")
+	child := filepath.Join(t.TempDir(), "child.jsonl")
+	mustWrite(t, parent, []byte("{\"role\":\"user\"}\n"))
+	mustWrite(t, child, []byte("{\"role\":\"assistant\"}\n"))
+	hook := HookContext{SessionID: "parent", Transcript: parent, AgentTranscript: child}
+	out := &output{stdout: io.Discard, stderr: io.Discard}
+	if complete, err := collect(Codex, "", hook, true, true, out); err != nil || !complete {
+		t.Fatal(complete, err)
+	}
+	requests := w.at("/v0/traces/batches")
+	if len(requests) != 3 {
+		t.Fatal("missing transcript or context uploads", len(requests))
+	}
+	for i, request := range requests {
+		_, context := request.Body["session_context_manifests"]
+		if context != (i == 2) {
+			t.Fatal("optional context ran before transcript backlog", i)
+		}
 	}
 }

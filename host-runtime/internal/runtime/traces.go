@@ -590,15 +590,6 @@ func collect(h Host, lifecycle string, context HookContext, active, quiet bool, 
 	exceeded := errors.Is(err, errDeadline)
 	options.Limit = 0
 	options.Deadline = time.Now().Add(collectBudget())
-	contextOptions := options
-	contextOptions.Context, contextOptions.Lifecycle = hookContext, hookLifecycle
-	contextUploaded, contextErr := uploadSessionContext(pluginRoot(), contextOptions)
-	if authError(contextErr) {
-		return false, contextErr
-	}
-	if contextUploaded {
-		total.Batches++
-	}
 	if !exceeded {
 		counts, e := uploadPaths(current, options)
 		total.add(counts)
@@ -635,6 +626,15 @@ func collect(h Host, lifecycle string, context HookContext, active, quiet bool, 
 			}
 			exceeded = errors.Is(err, errDeadline)
 		}
+	}
+	contextOptions := options
+	contextOptions.Context, contextOptions.Lifecycle = hookContext, hookLifecycle
+	contextUploaded, contextErr := uploadSessionContext(pluginRoot(), contextOptions)
+	if authError(contextErr) {
+		return false, contextErr
+	}
+	if contextUploaded {
+		total.Batches++
 	}
 	complete := !exceeded && len(total.Unreadable) == 0 && exportComplete && contextErr == nil
 	status := "trace_upload_complete"
