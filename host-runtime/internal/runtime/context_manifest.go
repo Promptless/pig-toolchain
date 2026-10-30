@@ -55,35 +55,36 @@ var contextSecretPath = regexp.MustCompile(`(?i)(^\.env(\.|$)|(^|[-_.])(secrets?
 var contextSecretValue = regexp.MustCompile(`(?i)(api[_-]?key|secret|token|password|authorization|private[_-]?key)\s*['"]?\s*[:=]\s*['"]?[A-Za-z0-9._~+/=-]{20,}|authorization\s*['"]?\s*[:=]\s*['"]?(bearer|basic)\s+[A-Za-z0-9._~+/=-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----`)
 
 // OpenRoot confines reads even if a plugin changes symlinks while being scanned.
-// Limits bound inspected entries as well as retained payload bytes.
-func contextFile(root *os.Root, name string, remaining int) ([]byte, error) {
+// The byte count includes rejected contents and partial reads so exclusions
+// cannot replenish the cumulative source budget.
+func contextFile(root *os.Root, name string, remaining int) ([]byte, int, error) {
 	info, err := root.Lstat(name)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if !info.Mode().IsRegular() || info.Size() > maxContextFile || info.Size() > int64(remaining) {
-		return nil, errors.New("unsafe_or_large_file")
+		return nil, 0, errors.New("unsafe_or_large_file")
 	}
 	f, err := root.Open(name)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer f.Close()
 	opened, err := f.Stat()
 	if err != nil || !os.SameFile(info, opened) {
-		return nil, errors.New("file_changed")
+		return nil, 0, errors.New("file_changed")
 	}
 	b, err := io.ReadAll(io.LimitReader(f, int64(min(maxContextFile, remaining))+1))
 	if err != nil {
-		return nil, err
+		return nil, len(b), err
 	}
 	if len(b) > maxContextFile || len(b) > remaining {
-		return nil, errors.New("file_size")
+		return nil, len(b), errors.New("file_size")
 	}
 	if contextSecretValue.Match(b) {
-		return nil, errors.New("sensitive_content")
+		return nil, len(b), errors.New("sensitive_content")
 	}
-	return b, nil
+	return b, len(b), nil
 }
 func contextSensitivePath(path string) bool {
 	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
@@ -135,7 +136,7 @@ func skillDescription(content []byte, fallback string) (string, string) {
 func skillBundle(root *os.Root, path, name string, deadline time.Time) (object, []object, error) {
 	files := []object{}
 	diagnostics := contextDiagnostics{}
-	sourceBytes, visited := 0, 0
+	sourceBytes, inspectedBytes, visited := 0, 0, 0
 	truncated := false
 	err := walkContext(root, func(relative string, entry fs.DirEntry, walkErr error) error {
 		if err := checkDeadline(deadline); err != nil {
@@ -162,7 +163,8 @@ func skillBundle(root *os.Root, path, name string, deadline time.Time) (object, 
 		if entry.IsDir() {
 			return nil
 		}
-		b, err := contextFile(root, relative, maxContextSource-sourceBytes)
+		b, inspected, err := contextFile(root, relative, maxContextSource-inspectedBytes)
+		inspectedBytes += inspected
 		if err != nil {
 			diagnostics.add(object{"code": "context_artifact_file_skipped", "severity": "warning", "path": relative})
 			return nil
@@ -227,7 +229,7 @@ func sessionContext(rootPath string, o uploadOptions) (object, []object, error) 
 			if err != nil {
 				continue
 			}
-			b, err := contextFile(skill, "SKILL.md", maxContextFile)
+			b, _, err := contextFile(skill, "SKILL.md", maxContextFile)
 			if err != nil {
 				skill.Close()
 				continue

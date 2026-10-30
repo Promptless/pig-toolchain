@@ -221,7 +221,7 @@ func TestContextFileAndInventoryLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	file.Close()
-	if _, err := contextFile(root, "large.md", maxContextSource); err == nil {
+	if _, _, err := contextFile(root, "large.md", maxContextSource); err == nil {
 		t.Fatal("oversized file accepted")
 	}
 	for i := 0; i < maxContextFiles+5; i++ {
@@ -383,5 +383,33 @@ func TestContextArtifactAdmissionIncludesRequestEnvelope(t *testing.T) {
 	delete(hashInput, "captured_at")
 	if hash(contextJSON(hashInput)) != manifest["manifest_hash"] {
 		t.Fatal("hash does not describe admitted manifest")
+	}
+}
+
+func TestContextSourceBudgetIncludesExcludedFileReads(t *testing.T) {
+	path := t.TempDir()
+	mustWrite(t, filepath.Join(path, "SKILL.md"), []byte("# Test"))
+	excluded := append([]byte("token=abcdefghijklmnopqrstuv1234\n"), bytes.Repeat([]byte("x"), 10<<20)...)
+	for i := range 3 {
+		mustWrite(t, filepath.Join(path, fmt.Sprintf("excluded%d.md", i)), excluded)
+	}
+	// This otherwise safe file fits the per-file limit, but cannot fit after
+	// inspecting the three excluded files. Exclusion must not replenish budget.
+	mustWrite(t, filepath.Join(path, "z-reference.md"), bytes.Repeat([]byte("x"), 3<<20))
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if _, inspected, err := contextFile(root, "excluded0.md", maxContextSource); err == nil || inspected != len(excluded) {
+		t.Fatal("excluded content did not consume its read budget", inspected, err)
+	}
+	bundle, _, err := skillBundle(root, path, "test", time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := bundle["files"].([]object)
+	if len(files) != 1 || files[0]["path"] != "SKILL.md" {
+		t.Fatal("excluded reads bypassed cumulative source budget", len(files))
 	}
 }
