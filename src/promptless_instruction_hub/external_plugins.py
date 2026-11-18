@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
+from time import sleep
 from typing import cast
 
 from promptless_instruction_hub.config import EXTERNAL_LOCK_PATH, RELEASE_MANIFEST_PATH
@@ -305,12 +308,25 @@ def _verify_external_plugins(
 def _fetch_revision(root: Path, url: str, requested: str) -> GitRevision:
     root.mkdir()
     _git(root, "init", "--bare", "--quiet")
-    try:
-        _git(root, "fetch", "--quiet", "--no-tags", "--depth=1", "--recurse-submodules=no", "--", url, requested)
-    except InstructionHubError as exc:
-        raise InstructionHubError(
-            f"cannot fetch external plugin revision {requested} from {url}; check the revision and repository access"
-        ) from exc
+    for attempt, delay in enumerate((*_FETCH_RETRY_DELAYS, None), start=1):
+        try:
+            _git(root, "fetch", "--quiet", "--no-tags", "--depth=1", "--recurse-submodules=no", "--", url, requested)
+            break
+        except _TransientGitError as exc:
+            if delay is None:
+                raise InstructionHubError(
+                    f"cannot fetch external plugin revision {requested} from {url}: {exc.reason} "
+                    f"persisted after {attempt} attempts; retry the job later"
+                ) from exc
+            print(
+                f"warning: fetching {url} failed with {exc.reason}; retrying in {delay}s",
+                file=sys.stderr,
+            )
+            sleep(delay)
+        except InstructionHubError as exc:
+            raise InstructionHubError(
+                f"cannot fetch external plugin revision {requested} from {url}; check the revision and repository access"
+            ) from exc
     sha = _git(root, "rev-parse", "FETCH_HEAD^{commit}").strip()
     if requested != "HEAD" and sha != requested:
         raise InstructionHubError(f"external source did not resolve to the requested commit {requested}")
@@ -332,12 +348,52 @@ def _git(root: Path, *arguments: str) -> str:
             timeout=60,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except subprocess.TimeoutExpired as exc:
+        raise _TransientGitError(f"external plugin git {arguments[0]} could not complete", "a timeout") from exc
+    except OSError as exc:
         raise InstructionHubError(f"external plugin git {arguments[0]} could not complete") from exc
     if result.returncode:
-        # Credential helpers can include credentials in stderr. Report the operation only.
-        raise InstructionHubError(f"external plugin git {arguments[0]} failed (exit {result.returncode})")
+        # Credential helpers can include credentials in stderr. Report the operation and,
+        # for transient server or network failures, only a fixed description of the cause.
+        message = f"external plugin git {arguments[0]} failed (exit {result.returncode})"
+        if transient := _transient_git_failure(result.stderr):
+            raise _TransientGitError(message, transient)
+        raise InstructionHubError(message)
     return result.stdout
+
+
+# GitHub rate-limits anonymous fetches (HTTP 429) and occasionally returns 5xx or
+# drops connections; these clear within seconds, so retry them instead of failing
+# the build. Missing revisions and access errors fail immediately.
+_FETCH_RETRY_DELAYS = (5, 15, 45)
+_HTTP_STATUS = re.compile(r"\bHTTP (429|5\d\d)\b|returned error: (429|5\d\d)\b")
+_NETWORK_FAILURES = (
+    "RPC failed",
+    "expected 'packfile'",
+    "early EOF",
+    "unexpected disconnect",
+    "remote end hung up",
+    "Connection reset",
+    "Connection timed out",
+    "Failed to connect",
+    "Recv failure",
+    "TLS",
+    "SSL",
+)
+
+
+class _TransientGitError(InstructionHubError):
+    def __init__(self, message: str, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+def _transient_git_failure(stderr: str) -> str | None:
+    if match := _HTTP_STATUS.search(stderr):
+        return f"HTTP {match.group(1) or match.group(2)}"
+    if any(failure in stderr for failure in _NETWORK_FAILURES):
+        return "a network error"
+    return None
 
 
 def _validate_component_paths(

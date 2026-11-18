@@ -451,6 +451,69 @@ def test_git_timeout_fails_cli_cleanly(
     assert "could not complete" in capsys.readouterr().err
 
 
+def _fail_fetches(monkeypatch: pytest.MonkeyPatch, count: int, stderr: str) -> list[float]:
+    """Fail the first ``count`` git fetches with ``stderr`` and record retry delays."""
+    real_run, failures, delays = subprocess.run, [count], []
+
+    def run(command: list[str], *args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if "fetch" in command and failures[0]:
+            failures[0] -= 1
+            return subprocess.CompletedProcess(command, 128, "", stderr)
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr("promptless_instruction_hub.external_plugins.sleep", delays.append)
+    return delays
+
+
+RATE_LIMITED = "error: RPC failed; HTTP 429 curl 22 The requested URL returned error: 429\nfatal: expected 'packfile'\n"
+
+
+@pytest.mark.parametrize(
+    ("stderr", "reason"),
+    [
+        (RATE_LIMITED, "HTTP 429"),
+        ("fatal: unable to access 'https://github.com/x.git/': The requested URL returned error: 502\n", "HTTP 502"),
+        ("error: RPC failed; curl 92 HTTP/2 stream 5 was not closed cleanly: CANCEL (err 8)\n", "a network error"),
+    ],
+)
+def test_transient_fetch_failures_are_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], stderr: str, reason: str
+) -> None:
+    upstream, hub = tmp_path / "upstream", tmp_path / "hub"
+    sha = make_upstream(upstream, monkeypatch)
+    init_hub(hub, org="Promptless")
+    write_external(hub, external_definition(sha))
+    delays = _fail_fetches(monkeypatch, 2, stderr)
+    assert main(["verify-external", "--hub", str(hub)]) == 0
+    assert delays == [5, 15]
+    assert f"failed with {reason}; retrying in 5s" in capsys.readouterr().err
+
+
+def test_persistent_rate_limit_reports_the_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    init_hub(tmp_path, org="Promptless")
+    write_external(tmp_path, external_definition())
+    delays = _fail_fetches(monkeypatch, 99, RATE_LIMITED + "secret-token")
+    assert main(["verify-external", "--hub", str(tmp_path)]) == 1
+    assert delays == [5, 15, 45]
+    err = capsys.readouterr().err
+    assert "HTTP 429 persisted after 4 attempts" in err
+    assert "secret-token" not in err
+
+
+def test_missing_revision_is_not_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    init_hub(tmp_path, org="Promptless")
+    write_external(tmp_path, external_definition())
+    delays = _fail_fetches(monkeypatch, 99, "fatal: couldn't find remote ref " + "a" * 40)
+    assert main(["verify-external", "--hub", str(tmp_path)]) == 1
+    assert delays == []
+    assert "check the revision and repository access" in capsys.readouterr().err
+
+
 def test_manifest_can_reference_plugin_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     upstream, hub = tmp_path / "upstream", tmp_path / "hub"
     make_upstream(upstream, monkeypatch)
