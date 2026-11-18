@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -306,9 +307,12 @@ def _verify_external_plugins(
 
 
 def _fetch_revision(root: Path, url: str, requested: str) -> GitRevision:
-    root.mkdir()
-    _git(root, "init", "--bare", "--quiet")
     for attempt, delay in enumerate((*_FETCH_RETRY_DELAYS, None), start=1):
+        # Start each attempt from an empty repository: a fetch killed by the timeout
+        # leaves shallow.lock behind, which would make every later attempt fail.
+        shutil.rmtree(root, ignore_errors=True)
+        root.mkdir()
+        _git(root, "init", "--bare", "--quiet")
         try:
             _git(root, "fetch", "--quiet", "--no-tags", "--depth=1", "--recurse-submodules=no", "--", url, requested)
             break
@@ -360,7 +364,8 @@ def _git(root: Path, *arguments: str) -> str:
     try:
         result = subprocess.run(
             ["git", "-c", f"core.hooksPath={os.devnull}", "-C", str(root), *arguments],
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"},
+            # LC_ALL=C keeps git's messages in English for the permanent-failure match.
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never", "LC_ALL": "C"},
             text=True,
             capture_output=True,
             timeout=60,

@@ -467,6 +467,32 @@ def _fail_fetches(monkeypatch: pytest.MonkeyPatch, count: int, stderr: str) -> l
     return delays
 
 
+def test_retry_after_timeout_starts_from_a_fresh_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    upstream, hub = tmp_path / "upstream", tmp_path / "hub"
+    sha = make_upstream(upstream, monkeypatch)
+    init_hub(hub, org="Promptless")
+    write_external(hub, external_definition(sha))
+    real_run, timed_out, delays = subprocess.run, [], []
+
+    def run(command: list[str], *args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if "fetch" in command and not timed_out:
+            # A fetch killed mid-download leaves git's shallow lock in the repository.
+            repository = Path(command[command.index("-C") + 1])
+            (repository / "shallow.lock").write_text("")
+            timed_out.append(repository)
+            raise subprocess.TimeoutExpired(command, 60)
+        assert kwargs["env"]["LC_ALL"] == "C"
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr("promptless_instruction_hub.external_plugins.sleep", delays.append)
+    assert main(["verify-external", "--hub", str(hub)]) == 0
+    assert delays == [5]
+    assert "failed (timed out); retrying in 5s" in capsys.readouterr().err
+
+
 RATE_LIMITED = "error: RPC failed; HTTP 429 curl 22 The requested URL returned error: 429\nfatal: expected 'packfile'\n"
 
 
