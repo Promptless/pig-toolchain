@@ -387,6 +387,9 @@ Retention requires `--previous-release-root` (supplied by publish mode), the sam
 repository URL and target paths, and the same enabled targets for that plugin.
 Explicit pins and configuration changes still require a different Claude version
 when the plugin changes. Fetch failures and invalid manifests fail publication.
+Failed fetches, such as rate limits (HTTP 429), server errors, and dropped
+connections, are retried after 5, 15, and 45 seconds. A missing revision or
+repository and denied access fail immediately.
 
 The generated PIG plugin includes an
 [`add-external-plugin` skill](src/promptless_instruction_hub/managed_skill_assets/add-external-plugin/shared/SKILL.md)

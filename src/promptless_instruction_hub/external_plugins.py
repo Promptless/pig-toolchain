@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
+from time import sleep
 from typing import cast
 
 from promptless_instruction_hub.config import EXTERNAL_LOCK_PATH, RELEASE_MANIFEST_PATH
@@ -303,14 +307,24 @@ def _verify_external_plugins(
 
 
 def _fetch_revision(root: Path, url: str, requested: str) -> GitRevision:
-    root.mkdir()
-    _git(root, "init", "--bare", "--quiet")
-    try:
-        _git(root, "fetch", "--quiet", "--no-tags", "--depth=1", "--recurse-submodules=no", "--", url, requested)
-    except InstructionHubError as exc:
-        raise InstructionHubError(
-            f"cannot fetch external plugin revision {requested} from {url}; check the revision and repository access"
-        ) from exc
+    for attempt, delay in enumerate((*_FETCH_RETRY_DELAYS, None), start=1):
+        # Start each attempt from an empty repository: a fetch killed by the timeout
+        # leaves shallow.lock behind, which would make every later attempt fail.
+        shutil.rmtree(root, ignore_errors=True)
+        root.mkdir()
+        _git(root, "init", "--bare", "--quiet")
+        try:
+            _git(root, "fetch", "--quiet", "--no-tags", "--depth=1", "--recurse-submodules=no", "--", url, requested)
+            break
+        except _GitCommandError as exc:
+            if exc.permanent or delay is None:
+                tries = f" after {attempt} attempts" if attempt > 1 else ""
+                raise InstructionHubError(
+                    f"cannot fetch external plugin revision {requested} from {url} ({exc.reason}{tries}); "
+                    "check the revision and repository access"
+                ) from exc
+            print(f"warning: fetching {url} failed ({exc.reason}); retrying in {delay}s", file=sys.stderr)
+            sleep(delay)
     sha = _git(root, "rev-parse", "FETCH_HEAD^{commit}").strip()
     if requested != "HEAD" and sha != requested:
         raise InstructionHubError(f"external source did not resolve to the requested commit {requested}")
@@ -322,21 +336,58 @@ def _fetch_revision(root: Path, url: str, requested: str) -> GitRevision:
     return GitRevision(root, sha, files)
 
 
+# Hosts such as GitHub rate-limit anonymous fetches (HTTP 429), return 5xx errors
+# or drop connections; these clear within seconds. Retry every fetch failure except
+# a missing revision or repository, or denied access, which retrying cannot fix.
+_FETCH_RETRY_DELAYS = (5, 15, 45)
+_HTTP_STATUS = re.compile(r"\bHTTP (\d{3})\b|returned error: (\d{3})\b")
+_PERMANENT_FAILURES = (
+    "couldn't find remote ref",
+    "not our ref",
+    "Repository not found",
+    "does not appear to be a git repository",
+    "Authentication failed",
+    "could not read Username",
+    "could not read Password",
+    "Permission denied",
+)
+
+
+class _GitCommandError(InstructionHubError):
+    def __init__(self, message: str, *, reason: str, permanent: bool) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.permanent = permanent
+
+
 def _git(root: Path, *arguments: str) -> str:
     try:
         result = subprocess.run(
             ["git", "-c", f"core.hooksPath={os.devnull}", "-C", str(root), *arguments],
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"},
+            # LC_ALL=C keeps git's messages in English for the permanent-failure match.
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never", "LC_ALL": "C"},
             text=True,
             capture_output=True,
             timeout=60,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except subprocess.TimeoutExpired as exc:
+        raise _GitCommandError(
+            f"external plugin git {arguments[0]} could not complete", reason="timed out", permanent=False
+        ) from exc
+    except OSError as exc:
         raise InstructionHubError(f"external plugin git {arguments[0]} could not complete") from exc
     if result.returncode:
-        # Credential helpers can include credentials in stderr. Report the operation only.
-        raise InstructionHubError(f"external plugin git {arguments[0]} failed (exit {result.returncode})")
+        # Credential helpers can include credentials in stderr. Report the operation
+        # and a fixed description of the cause, never stderr itself.
+        status = _HTTP_STATUS.search(result.stderr)
+        code = (status.group(1) or status.group(2)) if status else None
+        permanent = code in {"401", "404"} or any(failure in result.stderr for failure in _PERMANENT_FAILURES)
+        raise _GitCommandError(
+            f"external plugin git {arguments[0]} failed (exit {result.returncode})",
+            reason=f"HTTP {code}" if code else f"git exit {result.returncode}",
+            permanent=permanent,
+        )
     return result.stdout
 
 

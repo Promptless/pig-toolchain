@@ -427,6 +427,7 @@ def test_git_failure_does_not_print_credential_helper_output(
     monkeypatch.setattr(
         subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, "", "secret-token")
     )
+    monkeypatch.setattr("promptless_instruction_hub.external_plugins.sleep", lambda delay: None)
     assert main(["verify-external", "--hub", str(tmp_path)]) == 1
     assert "secret-token" not in capsys.readouterr().err
 
@@ -449,6 +450,106 @@ def test_git_timeout_fails_cli_cleanly(
     monkeypatch.setattr(subprocess, "run", timeout)
     assert main(["verify-external", "--hub", str(tmp_path)]) == 1
     assert "could not complete" in capsys.readouterr().err
+
+
+def _fail_fetches(monkeypatch: pytest.MonkeyPatch, count: int, stderr: str) -> list[float]:
+    """Fail the first ``count`` git fetches with ``stderr`` and record retry delays."""
+    real_run, failures, delays = subprocess.run, [count], []
+
+    def run(command: list[str], *args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if "fetch" in command and failures[0]:
+            failures[0] -= 1
+            return subprocess.CompletedProcess(command, 128, "", stderr)
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr("promptless_instruction_hub.external_plugins.sleep", delays.append)
+    return delays
+
+
+def test_retry_after_timeout_starts_from_a_fresh_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    upstream, hub = tmp_path / "upstream", tmp_path / "hub"
+    sha = make_upstream(upstream, monkeypatch)
+    init_hub(hub, org="Promptless")
+    write_external(hub, external_definition(sha))
+    real_run, timed_out, delays = subprocess.run, [], []
+
+    def run(command: list[str], *args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if "fetch" in command and not timed_out:
+            # A fetch killed mid-download leaves git's shallow lock in the repository.
+            repository = Path(command[command.index("-C") + 1])
+            (repository / "shallow.lock").write_text("")
+            timed_out.append(repository)
+            raise subprocess.TimeoutExpired(command, 60)
+        assert kwargs["env"]["LC_ALL"] == "C"
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr("promptless_instruction_hub.external_plugins.sleep", delays.append)
+    assert main(["verify-external", "--hub", str(hub)]) == 0
+    assert delays == [5]
+    assert "failed (timed out); retrying in 5s" in capsys.readouterr().err
+
+
+RATE_LIMITED = "error: RPC failed; HTTP 429 curl 22 The requested URL returned error: 429\nfatal: expected 'packfile'\n"
+
+
+@pytest.mark.parametrize(
+    ("stderr", "reason"),
+    [
+        (RATE_LIMITED, "HTTP 429"),
+        ("fatal: unable to access 'https://github.com/x.git/': The requested URL returned error: 502\n", "HTTP 502"),
+        ("error: RPC failed; curl 92 HTTP/2 stream 5 was not closed cleanly: CANCEL (err 8)\n", "git exit 128"),
+        ("fatal: an error git has never printed before\n", "git exit 128"),
+    ],
+)
+def test_transient_fetch_failures_are_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], stderr: str, reason: str
+) -> None:
+    upstream, hub = tmp_path / "upstream", tmp_path / "hub"
+    sha = make_upstream(upstream, monkeypatch)
+    init_hub(hub, org="Promptless")
+    write_external(hub, external_definition(sha))
+    delays = _fail_fetches(monkeypatch, 2, stderr)
+    assert main(["verify-external", "--hub", str(hub)]) == 0
+    assert delays == [5, 15]
+    assert f"failed ({reason}); retrying in 5s" in capsys.readouterr().err
+
+
+def test_persistent_rate_limit_reports_the_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    init_hub(tmp_path, org="Promptless")
+    write_external(tmp_path, external_definition())
+    delays = _fail_fetches(monkeypatch, 99, RATE_LIMITED + "secret-token")
+    assert main(["verify-external", "--hub", str(tmp_path)]) == 1
+    assert delays == [5, 15, 45]
+    err = capsys.readouterr().err
+    assert "(HTTP 429 after 4 attempts)" in err
+    assert "secret-token" not in err
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "fatal: couldn't find remote ref refs/heads/missing\n",
+        "fatal: remote error: upload-pack: not our ref " + "a" * 40 + "\n",
+        "remote: Repository not found.\nfatal: repository 'https://github.com/x.git/' not found\n",
+        "fatal: could not read Username for 'https://github.com': terminal prompts disabled\n",
+        "fatal: unable to access 'https://github.com/x.git/': The requested URL returned error: 404\n",
+    ],
+)
+def test_permanent_fetch_failures_are_not_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], stderr: str
+) -> None:
+    init_hub(tmp_path, org="Promptless")
+    write_external(tmp_path, external_definition())
+    delays = _fail_fetches(monkeypatch, 99, stderr)
+    assert main(["verify-external", "--hub", str(tmp_path)]) == 1
+    assert delays == []
+    assert "check the revision and repository access" in capsys.readouterr().err
 
 
 def test_manifest_can_reference_plugin_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
